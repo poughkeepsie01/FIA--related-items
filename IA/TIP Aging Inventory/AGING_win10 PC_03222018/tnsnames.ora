@@ -1,0 +1,14 @@
+#==========================================
+#ORACLE R12 PROD ENVIRONMENT - AGING REPORT
+#==========================================
+OOVM0001_PRS3 = 
+  (DESCRIPTION = 
+                (ADDRESS = 
+                  (COMMUNITY = TCP_WORLD)
+                  (PROTOCOL = TCP)
+                  (Host = oovm0001.pras.spto.semicon.toshiba.co.jp)
+                  (Port = 1551)
+                )
+    (CONNECT_DATA = (SID = PRS3)
+    )
+  )
