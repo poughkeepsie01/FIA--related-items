@@ -1,0 +1,13 @@
+/*-------------------------------------------
+STC Judgment Script Checking
+-------------------------------------------*/
+select  *
+from    pcg_stc_daily_info
+where   seihin_name = -- input kataban
+
+/*-------------------------------------------
+EMC Judgment Script Checking
+-------------------------------------------*/
+select  *
+from    xxom_emc_mst
+where   emc_sehincd = -- input kataban

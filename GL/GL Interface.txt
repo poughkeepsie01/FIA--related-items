@@ -1,0 +1,25 @@
+PROGRAM	
+1. EXTRACTION PROGRAM - Auto execution 
+	
+	-GL INTERFACE papuntang XX00IFGL_JOURNAL_STG_ALL(PAYROLL,PRS,IA)
+	-RCV_RECEIVING_SUB_LEDGER papuntang XX00IFGL_JOURNAL_STG_ALL(RCV)
+	-if success interface change gl_interface.status = INTERFACED
+	
+	
+2. CONVERSION PROGRAM - Auto execution 		
+	
+	from STG table iinterface siya sa XX00IFGL_JOURNAL_IF_ALL
+	if success interface change status sa STG table from EXTRACED to INTERFACED meaning na insert na siya sa IF table.
+	Status kay IF table is INTERFACED
+	
+	
+3. DATA FILE CREATION PROGRAM - Auto execution 		
+	
+	Magkakaroon ng laman ung XX00IFGL_JOURNAL_IF_ALL.ftp_file_name (system generate pagke-create ng FTP_FILE_NAME)
+	Status is same
+	
+	
+4. DATA FILE TRANSFER - Auto execution 		
+	
+	Magiging TRANSFERRED na ung Status ng mga IF tables once okay
+	Then may mageemail na successfully interface na siya sa GAIA

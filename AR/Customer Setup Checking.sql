@@ -1,0 +1,43 @@
+select  distinct
+        hp.party_name "Customer Name",
+        hca.account_number,
+        hca.status customer_status,
+        hcsu.location,
+        hcsu.site_use_code,
+        hcsu.status location_status,        
+        hcsu.site_use_id,        
+        hl.address1,
+        hl.address2,
+        hl.address3,
+        hl.city,
+        hl.state,
+        hl.postal_code,
+        hca.cust_account_id,
+        hcsu.site_use_id customer_site_use_id,
+        hps.identifying_address_flag primary_address_flag,        
+        HOU.NAME "Operating Unit",
+        hp.creation_date,
+        hca.last_update_date
+from    apps.hz_parties hp,
+        apps.hz_party_sites hps,
+        apps.hz_locations hl,
+        apps.hz_cust_accounts hca,
+        apps.hz_cust_acct_sites_all hcas,
+        apps.hz_cust_site_uses_all hcsu,
+        apps.hz_customer_profiles hcp,
+        apps.hr_operating_units hou
+where   hp.party_id = hca.party_id(+)
+and     hp.party_id = hcp.party_id
+and     hp.party_id = hps.party_id
+and     hps.party_site_id = hcas.party_site_id
+and     hps.location_id = hl.location_id
+and     hca.cust_account_id = hcas.cust_account_id
+and     hcas.cust_acct_site_id = hcsu.cust_acct_site_id
+and     hca.cust_account_id = hcp.cust_account_id
+--and     hca.account_number in ('T0-V982-101','T0-V983-101','T0-J350-005')
+and     hca.account_number in ('T0680100000','T0680100001','T0680100002')
+ORDER BY hp.creation_date DESC --hca.account_number 
+--and     hp.party_name = 'TOSHIBA CORPORATION' --LIKE '%TOSHIBA%MEMORY%CORPORATION%'
+--'T0-Q835-003',
+--'T0-R527-001',
+--'T0-R896-002')

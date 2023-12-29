@@ -1,0 +1,24 @@
+PROGRAM	
+1. EXTRACTION PROGRAM - Auto execution at 5pm	
+	
+	-ra_interface_lines_all papuntang xx00ifar_trx_line_stg_all at xx00ifar_trx_hdr_stg_all
+	-if success interface change ra_interface_lines_all.attribute11 = 'I' tapos status sa AR STG table ay EXTRACTED
+	
+	
+2. CONVERSION PROGRAM - Auto execution at 5pm		
+	
+	from STG table iinterface siya sa xx00ifar_trx_hdr_if_all at xx00ifar_trx_line_if_all
+	if success interface change status sa STG table from EXTRACED to INTERFACED meaning na insert na siya sa IF table.
+	Status kay IF table is INTERFACED
+	
+	
+3. DATA FILE CREATION PROGRAM - Auto execution at 5pm		
+	
+	Magkakaroon ng laman ung xx00ifar_trx_hdr_if_all.ftp_file_name at xx00ifar_trx_line_if_all.ftp_file_name(system generate pagke-create ng FTP_FILE_NAME)
+	Status is same
+	
+	
+4. DATA FILE TRANSFER - Auto execution at 5pm		
+	
+	Magiging TRANSFERRED na ung Status ng mga IF tables once okay
+	Then may mageemail na successfully interface na siya sa GAIA
