@@ -1,0 +1,1 @@
+http://fovm0038.pras.spto.semicon.toshiba.co.jp:8070/OA_HTML/OA.jsp?page=/oracle/apps/fnd/framework/navigate/webui/HomePG&homePage=Y&OAPB=FWK_HOMEPAGE_BRAND&transactionid=2018278001&oapc=4&oas=aMOD9P8Zl2D9-jbhrDvqBw..#

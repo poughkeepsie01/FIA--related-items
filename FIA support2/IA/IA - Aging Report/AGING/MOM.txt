@@ -1,0 +1,25 @@
+Incident Report/ Issue Sheet
+5:30PM auto request to MPD
+
+PWC
+If there's an error Message GAIA interface For mismatch in supplier
+-None since sync ang master ng supplier ni GAIA and PRAS?
+
+GL Receiving
+PR PO dun ilalagay supplier/sitecode then receive
+GL Conversion
+	Validation if vendor code validation in GAIA
+	Status: TRANSFERRED
+
+Torico code:
+
+Isang transaction:
+With recovery and transferred. same month.
+
+Screenshot ng elapsed months
+11am
+330-4
+
+
+
+
