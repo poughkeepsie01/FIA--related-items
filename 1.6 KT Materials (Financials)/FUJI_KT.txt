@@ -1,0 +1,12 @@
+pcg_sa_invoices_lines
+MTL_Material_Transaction
+
+1.Uploaded list(What kind)
+EmEditor
+
+Assembly ite,
+
+SELECT * FROM mtl_parameters
+where organization_code  = 'EHD
+
+SELECT * FROM MTL_SYSTEMS_ITEMS

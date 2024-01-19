@@ -1,0 +1,136 @@
+#!/bin/ksh
+# $Header: XX00IFCMN_FTP.prog 1.0 2012/04/02 18:00:00  $
+#########################################################################
+# TYPE                  : Unix Script                                                                               #
+#                                                                                                                             #
+# NAME                  : XX00IFCMN_FTP.prog                                                              #
+#                                                                                                                             #
+#                                                                                                                             #
+#AUTHOR         DATE            VERSION         DESCRIPTION                                     #
+#-----------------------------------------------------------------------------------------------------------------------------#
+#Infosys        04/02/2012      1.0             Created                                                        #
+#########################################################################
+
+### Input Parameters ###
+export ORA_LOGIN=`echo $1`
+export ORA_USERID=`echo $2`
+export ORA_USER=`echo $3`
+export ORA_REQID=`echo $4`
+export ENTITY=`echo $5`
+
+. /vol03/mprs7ADD/applprs7/prsappl/xx00if/12.1.0/bin/prasgaia_env.env #### Please modify here complete ENV File Folder Location for each UNIX environment
+  
+get_file_path()
+{
+	cd $CMN_DATABASE_TOP
+	echo "Derivation of File Path" 
+   	(
+    	echo "WHENEVER SQLERROR EXIT FAILURE;"
+    	echo "set pagesize 0 ;  "
+    	echo "set echo off ;   "
+    	echo "set feedback off ;  "
+    	echo "set head off ;    "
+    	echo "set verify off;   "
+    	echo "set serveroutput on;"
+    	echo "execute xx00ifcmn_func_util_sv.apps_initialize($ORA_REQID);"
+    	echo "select fnd_profile.value('XX00IFCMN_DATABASE_TOP')||'/'||fnd_profile.value('XX00IFCMN_FLAT_FILE_PATH') from dual;"
+    	echo "exit;"
+   	) > ${ORA_REQID}.sql
+   	echo "Tmp file done" 
+   	sqlplus -s $FCP_LOGIN @${ORA_REQID}.sql > ${ORA_REQID}_1.tmp
+   	sed -n '/./ {
+   	p
+   	d
+   	}' ${ORA_REQID}_1.tmp>${ORA_REQID}_file_path.tmp
+   	echo "Var Dec" 
+   	SOURCE_FILE_DIR=`cat ${ORA_REQID}_file_path.tmp`
+   	echo "Parameters $SOURCE_FILE_DIR" $SOURCE_FILE_DIR
+   	echo "Remove" 
+   	rm -f ${ORA_REQID}*
+   	echo "Parameters $SOURCE_FILE_DIR" $SOURCE_FILE_DIR
+}
+
+initialize()
+{
+### Initializing Organization Variable Names ###
+        echo "Start" 
+        export SRC_FILE_DIR=$SOURCE_FILE_DIR
+}
+
+
+ftp_out()
+{
+       echo "FTP of DATA Files Start"
+	cd $SRC_FILE_DIR/$ENTITY/out
+	for file_name in `ls *.dat`
+	do
+		ftp -n $HOST << EOD
+		user ${USER_NAME} ${PASSWORD}
+		passive
+		binary
+		cd $DEST_FILE_DIR
+		put $file_name
+		bye
+EOD
+
+   		ftp_data_status=$?
+   	
+		if [ $ftp_data_status = 0 ] 
+		then
+			echo "FTP success ."$file_name
+			
+			
+			(
+			echo "WHENEVER SQLERROR EXIT FAILURE;"
+			echo "set pagesize 0 ;  "
+			echo "set echo off ;   "
+			echo "set feedback off ;  "
+			echo "set head off ;    "
+			echo "set verify off;   "
+			echo "set serveroutput on;"
+			echo "execute xx00ifcmn_func_util_sv.apps_initialize($ORA_REQID);"
+			echo "execute xx00ifcmn_func_util_sv.update_process_status('$file_name');"  			
+			echo "exit;"
+			) > ${ORA_REQID}_update.sql
+		
+sqlplus -s $FCP_LOGIN @${ORA_REQID}_update.sql > ${ORA_REQID}_LOG.tmp
+ cat ${ORA_REQID}_LOG.tmp
+    rm -f ${ORA_REQID}*
+ 	mv $file_name $SRC_FILE_DIR/$ENTITY/bkup 	
+			
+		else
+			echo "FTP failed ." $file_name 
+			return $ftp_data_status
+			#exit 0
+		fi
+	done
+			
+        status=$? 
+        if [ $status -eq 0 ]
+        then
+	  echo "FTP of DATA File End"
+        else
+
+          echo "FTP failed with errors ."
+           return $status
+        fi	
+	return 0
+}  
+
+main()
+{
+        echo "Start get_file_path" 
+        echo "Parameters REQID  $ORA_REQID"
+     	echo "Parameters ENTITY $ENTITY     "
+     	echo "Start get_file_path" 
+### Derive File Path ###   
+        get_file_path 
+### Initializing the Parameters ###
+   	initialize
+        echo "ftp_out" 
+### FTP Files from Source to Destination and mark the status ###
+        ftp_out
+### Clear any flat files ###
+   	exit 0
+}
+main
