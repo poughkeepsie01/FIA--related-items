@@ -1,0 +1,9 @@
+yung mga na extract is nasa STAGING with process status extracted
+
+and yung mga na convert is nasa INTERFACE with process status interfaced
+
+pinagkaiba ng 2 table is yung STAGING table may transaction_id sa dulo
+and yung INTERFACE table may ftp_file_name
+
+naputol sa jr header 4652480 dulo after 4652479 
+bakit kaya???
