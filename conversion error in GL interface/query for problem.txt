@@ -1,0 +1,12 @@
+select *
+from XX00IF.XX00IFGL_JOURNAL_IF_ALL
+where 1=1
+and JE_HEADER_NUM in ('4652480', '4652479','4652481', '4652478') 
+--and ftp_file_name = 'GLCMNEBS_20240114_001_L.dat'
+--and process_status = 'TRANSFERRED';
+
+select *
+from XX00IF.
+
+where 1=1
+and JE_HEADER_NUM in (  '4652477','4652478','4652479', '4652480' ,'4652481','4652482') 
