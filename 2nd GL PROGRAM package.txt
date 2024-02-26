@@ -1,0 +1,3574 @@
+CREATE OR REPLACE PACKAGE BODY APPS.xx00ifgl_interface_conc_sv_tip 
+AS
+/**********************************************************************************************************************************
+*
+*  Package Name :  xx00ifgl_interface_conc_sv
+*  Description  :  GL Interface Package
+*  Extension ID :  XX00IFGL001B1
+*  Version      :  1.00
+*
+*  Program List
+*  ------------------------  ----------    ---------      ----------------------------------------------
+*          Name                 Type           Ret          Description
+*  ------------------------  ----------    ---------      ----------------------------------------------
+*   main_extr                   P                           Extraction of GL Data
+*   main_conv                   P                           Conversion and Error Check procedure is called from this procedure
+*   writelog                    P                           To check log message
+*   populate_gl_stg             P                           Insertion into GL Journal staging Table
+*   populate_gl_if              P                           Insertion of GL Data into interface table by calling populate_gl_line_if
+*   populate_gl_line_if         P                           Insertion of Data into the interface Table
+*
+*  Change Record
+*  -----------------------     ----------     ------------------    ----------------------------------------------
+*           Date                  Ver.            Editor                 Description
+*  -----------------------     ----------     ------------------    ----------------------------------------------
+*         05-APR-2013            1.00             ECT                 Newly created(v1.00 by 11i)
+*                                                                    Modification for JE Line num
+*                                4.01
+*         06-FEB-2018            4.02             N.Roberto/J.Abello  Create New Cursor for Receiving and GL,
+*                                                                      Create New Validation for Receiving and GL           
+*
+***********************************************************************************************************************************/
+
+--
+-- Global Variable Declaration
+
+   cv_package_name    CONSTANT VARCHAR2 (30) := 'xx00ifgl_interface_conc_sv_tip'; -- package name
+   
+   cv_delimiter_msg   CONSTANT VARCHAR2 (1)  := '|';     -- message delimiter
+   cv_period          CONSTANT VARCHAR2 (1)  := '.';      -- message code
+   cv_status          CONSTANT VARCHAR2 (1)  := 'U';
+  
+   gv_xx01ledg_name            VARCHAR2 (50)
+                               := fnd_profile.VALUE ('XX00IFCMN_LEDGER_NAME');
+ -- modification start Lib_ver.4.01 
+   gv_attribute11_ifc            CONSTANT VARCHAR2(15) := 'T0905930000';
+       lv_insert_new_record         VARCHAR2(1) := 'N';
+       ln_new_rec_entered_dr                NUMBER := 0;
+       ln_new_rec_accounted_dr              NUMBER := 0;
+       lv_credit_debit_flag         VARCHAR2(1) := NULL;
+       ln_new_rec_je_line_num       NUMBER;
+ -- modification end Lib_ver.4.01 
+   gd_xx02_sysdate             DATE          := SYSDATE;
+
+/********************************************************************************************************
+*  Procedure Name       :   main_extr
+*  Description          :   Insertion of Data into GL Journal Stg Table
+********************************************************************************************************/
+   PROCEDURE main_extr (
+      ov_errbuf         OUT   VARCHAR2,                         --   error message
+      ov_retcode        OUT   VARCHAR2,                         --   return code
+      iv_source_name    IN    VARCHAR2,                         
+      iv_period_name    IN    VARCHAR2
+--      lv_user_je_category_name IN VARCHAR2
+   )
+   IS
+      /* 05-APR-2013 modify start */
+      /*
+      CURSOR get_gl_new_data (lv_header_id NUMBER)
+      IS
+         SELECT *
+           FROM xx00ifgl_inv_gl_journal_data
+          WHERE je_header_id = lv_header_id;
+         
+         
+      CURSOR get_gl_header_id
+      IS
+         SELECT   je_header_id
+             FROM xx00ifgl_inv_gl_journal_data
+         GROUP BY je_header_id;
+      */
+      
+      --Del start Lib_ver.4.02
+--      CURSOR get_gl_new_data (
+--         lv_transaction_id         NUMBER,                  --larry 
+--         lv_user_je_category_name  VARCHAR2,
+--         iv_period_name            VARCHAR2,
+--         iv_source_name             VARCHAR2)              --larry 
+--      IS
+--         SELECT *
+--           FROM xx00ifgl_inv_gl_journal_data
+--          WHERE transaction_id = lv_transaction_id                 
+--            AND upper(user_je_category_name) = upper(lv_user_je_category_name)
+--        -- modification start Lib_ver.4.01 
+--          and upper(period_name) = upper(iv_period_name)
+--            AND UPPER(user_je_source_name) = UPPER(iv_source_name)
+--        -- modification end Lib_ver.4.01 ;   
+--;
+
+--      CURSOR get_gl_header_id (v_period_name varchar2,
+--                               v_source_name varchar2)
+--      IS
+--         SELECT transaction_id,
+--                user_je_category_name,
+--                period_name,
+--                user_je_source_name,
+--                je_header_id  
+--           FROM xx00ifgl_inv_gl_journal_data
+--        -- modification start Lib_ver.4.01 
+--          WHERE upper(period_name) = upper(v_period_name) 
+--            AND UPPER(user_je_source_name) = UPPER(v_source_name)
+--        -- modification end Lib_ver.4.01 
+--         GROUP BY transaction_id,
+--                  user_je_category_name,
+--                  period_name,
+--                  user_je_source_name,
+--                  je_header_id;  
+                    --;
+      /* 05-APR-2013 modify end */
+--Del end Lib_ver.4.02      
+
+--Add start Lib ver.4.02
+      CURSOR get_gl_new_data_rcv (lv_transaction_id NUMBER
+                                 ,iv_period_name varchar2)
+      IS
+          SELECT 'NEW' status,
+                  'A' actual_flag,
+                  rrsl.rcv_transaction_id transaction_id,
+                  'Receiving' user_je_category_name,
+                  'Cost Management' user_je_source_name, --'T090593_L10_0012'                 user_je_source_name,                  --GAIA Source for Purchasing
+                  rrsl.accounting_date accounting_date,
+                  rrsl.code_combination_id code_combination_id,
+                  NULL je_header_id,
+                  NULL je_line_num,
+                  NULL segment1,
+                  NULL segment2,
+                  NULL segment3,
+                  NULL segment4,
+                  NULL segment5,
+                  NULL segment6,
+                  NULL segment7,
+                  NULL segment8,
+                  NULL segment9,
+                  NULL segment10,
+                  NULL segment11,
+                  rrsl.period_name period_name,
+                  rrsl.reference1 reference1,
+                  rrsl.reference2 reference2,
+                  rrsl.reference3 reference3,
+                  rrsl.reference4 reference4,
+                  rrsl.reference5 reference5,
+                  rrsl.reference6 reference6,
+                  rrsl.reference7 reference7,
+                  rrsl.reference8 reference8,
+                  rrsl.reference9 reference9,
+                  rrsl.reference10 reference10,
+                  NULL reference11,
+                  NULL jgzz_recon_ref,
+                  NULL tax_regime_code,
+                  NULL tax_code,
+                  NULL tax_status_code,
+                  NULL tax_jurisdiction_code,
+                  NULL tax_rate_code,
+                  NULL tax_rate,
+                  rrsl.attribute1 attribute1,
+                  rrsl.attribute2 attribute2,
+                  rrsl.attribute3 attribute3,
+                  rrsl.attribute4 attribute4,
+                  rrsl.attribute5 attribute5,
+                  rrsl.attribute6 attribute6,
+                  rrsl.attribute7 attribute7,
+                  rrsl.attribute8 attribute8,
+                  rrsl.attribute9 attribute9,
+                  rrsl.attribute10 attribute10,
+                  rrsl.attribute11 attribute11,
+                  rrsl.attribute12 attribute12,
+                  rt.unit_of_measure attribute13,
+                  rrsl.attribute14 attribute14,
+                  rrsl.attribute15 attribute15,
+                  NULL attribute16,
+                  NULL attribute17,
+                  NULL attribute18,
+                  NULL attribute19,
+                  NULL attribute20,
+                  rrsl.entered_dr entered_dr,
+                  rrsl.entered_cr entered_cr,
+                  rrsl.accounted_dr accounted_dr,
+                  rrsl.accounted_cr accounted_cr,
+                  rrsl.currency_code currency_code,
+                  rrsl.currency_conversion_date currency_conversion_date,
+                  rrsl.user_currency_conversion_type user_currency_conversion_type,
+                  rrsl.currency_conversion_rate currency_conversion_rate
+        FROM   rcv_receiving_sub_ledger rrsl 
+              ,rcv_transactions rt
+        WHERE  rrsl.rcv_transaction_id = rt.transaction_id
+        AND rrsl.rcv_transaction_id = lv_transaction_id
+        AND UPPER(rrsl.period_name) = UPPER(iv_period_name);
+        
+        
+      CURSOR get_gl_new_data_gl (lv_transaction_id NUMBER
+                                ,iv_period_name    VARCHAR2
+                                ,iv_source_name    VARCHAR2)
+      IS
+      SELECT 'NEW' status,
+              'A' actual_flag,
+              gl.je_header_id transaction_id,
+              category2.je_category_key user_je_category_name,
+              gl.user_je_source_name user_je_source_name,
+              gl.accounting_date accounting_date,
+              gl.code_combination_id code_combination_id,
+              gl.je_header_id je_header_id,
+              gl.je_line_num je_line_num,
+              gl.segment1 segment1,
+              gl.segment2 segment2,
+              gl.segment3 segment3,
+              gl.segment4 segment4,
+              gl.segment5 segment5,
+              gl.segment6 segment6,
+              gl.segment7 segment7,
+              gl.segment8 segment8,
+              gl.segment9 segment9,
+              gl.segment10 segment10,
+              gl.segment11 segment11,
+              gl.period_name period_name,
+              gl.reference1 reference1,
+              gl.reference2 reference2,
+              gl.reference3 reference3,
+              gl.reference4 reference4,
+              gl.reference5 reference5,
+              gl.reference6 reference6,
+              gl.reference7 reference7,
+              gl.reference8 reference8,
+              gl.reference9 reference9,
+              gl.reference10 reference10,
+              NULL reference11,
+              jgzz_recon_ref jgzz_recon_ref,
+              NULL tax_regime_code,
+              NULL tax_code,
+              NULL tax_status_code,
+              NULL tax_jurisdiction_code,
+              NULL tax_rate_code,
+              NULL tax_rate,
+              gl.attribute1 attribute1,
+              gl.attribute2 attribute2,
+              gl.attribute3 attribute3,
+              gl.attribute4 attribute4,
+              gl.attribute5 attribute5,
+              gl.attribute6 attribute6,
+              gl.attribute7 attribute7,
+              gl.attribute8 attribute8,
+              gl.attribute9 attribute9,
+              gl.attribute10 attribute10,
+              gl.attribute11 attribute11,
+              gl.attribute12 attribute12,
+              gl.attribute13 attribute13,
+              gl.attribute14 attribute14,
+              gl.attribute15 attribute15,
+              gl.attribute16 attribute16,
+              gl.attribute17 attribute17,
+              gl.attribute18 attribute18,
+              gl.attribute19 attribute19,
+              gl.attribute20 attribute20,
+              gl.entered_dr entered_dr,
+              gl.entered_cr entered_cr,
+              gl.accounted_dr accounted_dr,
+              gl.accounted_cr accounted_cr,
+              gl.currency_code currency_code,
+              gl.currency_conversion_date currency_conversion_date,
+              gl.user_currency_conversion_type user_currency_conversion_type,
+              gl.currency_conversion_rate currency_conversion_rate
+         FROM gl_interface gl,
+              fnd_lookup_values source1,
+              fnd_lookup_values category1,
+              gl_je_sources_tl source2,
+              gl_je_categories_tl category2
+        WHERE     gl.status = 'NEW'
+              AND gl.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+              AND UPPER (gl.user_je_source_name) NOT IN
+                     ('RECEIVABLES', 'PAYABLES')
+              AND UPPER (gl.user_je_source_name) = source1.lookup_code
+              AND UPPER (gl.user_je_source_name) =
+                     UPPER (source2.user_je_source_name)
+              AND UPPER (category2.user_je_category_name) = category1.lookup_code
+              AND category2.je_category_key = category1.meaning
+              AND UPPER (source1.lookup_type) = 'XX00IFGL_SOURCE_NAME'
+              AND UPPER (category1.lookup_type) = 'XX00IFGL_CATEGORY_NAME'
+              AND UPPER (gl.user_je_category_name) = category1.lookup_code
+              AND UPPER (gl.user_je_category_name) =
+                     UPPER (category2.user_je_category_name)
+              AND source1.enabled_flag = 'Y'
+              AND category1.enabled_flag = 'Y'
+              AND TRUNC (SYSDATE) BETWEEN NVL (TRUNC (source1.start_date_active),
+                                               TRUNC (SYSDATE))
+                                      AND NVL (TRUNC (source1.end_date_active),
+                                               TRUNC (SYSDATE))
+              AND TRUNC (SYSDATE) BETWEEN NVL (
+                                             TRUNC (category1.start_date_active),
+                                             TRUNC (SYSDATE))
+                                      AND NVL (TRUNC (category1.end_date_active),
+                                               TRUNC (SYSDATE))
+              AND gl.je_line_num IS NOT NULL
+              AND gl.je_header_id = lv_transaction_id
+              AND UPPER(gl.period_name)  = UPPER(iv_period_name)
+              AND UPPER(gl.user_je_source_name) = UPPER(iv_source_name);                          
+      
+      CURSOR get_gl_header_id_rcv (v_period_name varchar2)
+      IS
+         SELECT rrsl.rcv_transaction_id transaction_id
+                  ,'Receiving' user_je_category_name
+                  ,rrsl.period_name period_name
+                  ,'Cost Management' user_je_source_name
+                  ,null je_header_id
+            FROM   rcv_receiving_sub_ledger rrsl 
+                  ,rcv_transactions rt
+            WHERE  rrsl.rcv_transaction_id = rt.transaction_id
+            AND    rrsl.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+            AND    rrsl.attribute11 IS NULL
+            AND    UPPER(rrsl.period_name) = UPPER(v_period_name) 
+            AND NOT EXISTS
+                         (SELECT 1
+                            FROM xx00ifgl_journal_stg stg
+                           WHERE     stg.je_category_key = 'Receiving' -- gaia values BU + Journal Category
+                                     AND stg.transaction_id = rrsl.rcv_transaction_id)
+            GROUP BY          rrsl.rcv_transaction_id,
+                              rrsl.period_name;
+                              
+        CURSOR get_gl_header_id_gl(v_period_name varchar2
+                                  ,v_source_name varchar2)
+        IS
+            SELECT    gl.je_header_id transaction_id,
+                      gl.user_je_category_name user_je_category_name,
+                      gl.period_name period_name,
+                      gl.user_je_source_name user_je_source_name,
+                      gl.je_header_id je_header_id      
+            FROM      gl_interface gl,
+                      fnd_lookup_values source1,
+                      fnd_lookup_values category1,
+                      gl_je_sources_tl source2,
+                      gl_je_categories_tl category2
+                WHERE     gl.status = 'NEW'
+                      AND gl.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+                      AND UPPER (gl.user_je_source_name) NOT IN
+                             ('RECEIVABLES', 'PAYABLES')
+                      AND UPPER (gl.user_je_source_name) = source1.lookup_code
+                      AND UPPER (gl.user_je_source_name) =
+                             UPPER (source2.user_je_source_name)
+                      AND UPPER (category2.user_je_category_name) = category1.lookup_code
+                      AND category2.je_category_key = category1.meaning
+                      AND UPPER (source1.lookup_type) = 'XX00IFGL_SOURCE_NAME'
+                      AND UPPER (category1.lookup_type) = 'XX00IFGL_CATEGORY_NAME'
+                      AND UPPER (gl.user_je_category_name) = category1.lookup_code
+                      AND UPPER (gl.user_je_category_name) =
+                             UPPER (category2.user_je_category_name)
+                      AND source1.enabled_flag = 'Y'
+                      AND category1.enabled_flag = 'Y'
+                      AND TRUNC (SYSDATE) BETWEEN NVL (TRUNC (source1.start_date_active),
+                                                       TRUNC (SYSDATE))
+                                              AND NVL (TRUNC (source1.end_date_active),
+                                                       TRUNC (SYSDATE))
+                      AND TRUNC (SYSDATE) BETWEEN NVL (
+                                                     TRUNC (category1.start_date_active),
+                                                     TRUNC (SYSDATE))
+                                              AND NVL (TRUNC (category1.end_date_active),
+                                                       TRUNC (SYSDATE))
+                      AND gl.je_header_id IS NOT NULL
+                      AND gl.je_line_num IS NOT NULL
+                      AND UPPER(gl.period_name)  = UPPER(iv_period_name)
+                      AND UPPER(gl.user_je_source_name) = UPPER(iv_source_name)
+               GROUP BY gl.je_header_id,
+                        gl.period_name,
+                        gl.user_je_category_name,
+                        gl.user_je_source_name;   
+      
+    --Add end Lib_ver.4.02
+--
+--Local Variable Declaration
+--
+
+-- ===============================
+-- local Constant
+-- ===============================
+      cv_proc_name    CONSTANT VARCHAR2 (100)                  := 'main_extr';
+      -- procedure name
+      cv_proc_desc    CONSTANT VARCHAR2 (50)          := 'GL Data Extraction';
+                                                        -- process description
+
+   gv_xx01ledg_name            VARCHAR2 (50)
+                               := fnd_profile.VALUE ('XX00IFCMN_LEDGER_NAME');
+      /* 05-APR-2013 add start */
+      cv_tax_rege_code CONSTANT VARCHAR2(30) 
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_REGE_CODE');
+      cv_tax_code      CONSTANT VARCHAR2(30) 
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_CODE');
+      cv_tax_stas_code CONSTANT VARCHAR2(30) 
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_STAS_CODE');
+      cv_tax_jurn_code CONSTANT VARCHAR2(30) 
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_JURN_CODE');
+      cv_tax_rate_code CONSTANT VARCHAR2(30) 
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_RATE_CODE');
+      cn_tax_rate      CONSTANT NUMBER       
+                               := TO_NUMBER(fnd_profile.VALUE ('XX00IFGL_TAX_RATE'));
+      /* 05-APR-2013 add end */
+--
+-- *** local Constant user define ***
+-- ===============================
+-- local variable
+-- ===============================
+      lv_errbuf                VARCHAR2 (5000);              -- error message
+      lv_retcode               VARCHAR2 (1);                   -- return code
+      lv_errmsg                VARCHAR2 (5000);            -- user error code
+      
+      lv_block                 VARCHAR2 (10);         -- process block number
+      --
+      lt_sess_info_str_type    xx00ifcmn_conc_init_proc_sv.sess_info_str_type;      
+      --
+      user_session_info_expt   EXCEPTION;
+      -- common API get_sess_info exception
+      lrt_xx00gl_interface     xx00ifgl_journal_stg%ROWTYPE;
+      ln_xx01_legal_ent_id     NUMBER                                 := NULL;
+      l_exe_main_para_expt     EXCEPTION;
+      l_exe_gl_ins_expt        EXCEPTION;
+      lv_gl_err_msg            VARCHAR2 (4000)                        := NULL;
+      lv_gl_err_msg_add        VARCHAR2 (4000)                        := NULL;
+      lv_chk_line_err          VARCHAR2 (1)                            := 'N';
+      ld_date_input            DATE;
+      ln_proc_cnt_hdr          NUMBER                                  := '0';
+      ln_proc_cnt_line         NUMBER                                  := '0';
+      ln_proc_cnt_hdr_line     NUMBER                                  := '0';  /* 05-APR-2013 add */
+      lv_je_header_num         VARCHAR2 (50)                           := NULL; /* 05-APR-2013 add */
+      ln_proc_cnt_line_temp    NUMBER                                  := '0';
+      ln_norm_proc_cnt_hdr     NUMBER                                  := '0';
+      ln_norm_proc_cnt_line    NUMBER                                  := '0';
+      ln_err_proc_cnt_hdr      NUMBER                                  := '0';
+      ln_err_proc_cnt_line     NUMBER                                  := '0';
+      lv_program_short_name    VARCHAR2 (50);
+      lv_program_name          VARCHAR2 (100);
+      lt_msg_line_atype        xx00ifcmn_conc_outp_sv.message_line_atype;
+      lt_msg_footer_atype      xx00ifcmn_conc_outp_sv.message_footer_atype;
+      lv_period_name           VARCHAR2 (50);--xx00ifgl_journal_stg.period_name%TYPE;
+      lv_source_name           VARCHAR2 (50);--xx00ifgl_journal_stg.user_je_source_name%TYPE;
+      
+      xx number;
+  
+   BEGIN
+      BEGIN
+         
+      fnd_file.put_line (fnd_file.log, iv_source_name||' '|| iv_period_name||' '||fnd_profile.VALUE('GL_SET_OF_BKS_ID'));
+         /*-#########  static START   #############*/
+         
+     -- ===============================================
+     -- Initialize process
+     -- ===============================================
+         lv_retcode := xx00ifcmn_const_sv.cv_success;               -- normal
+         lt_msg_line_atype :=
+                             xx00ifcmn_conc_outp_sv.message_line_atype (NULL);
+         lt_msg_footer_atype :=
+                           xx00ifcmn_conc_outp_sv.message_footer_atype (NULL);         
+         lv_errbuf := NULL;
+         
+         lv_block := '1-0';
+         
+         xx00ifcmn_conc_init_proc_sv.get_sess_info
+                                      (ov_errbuf          => lv_errbuf,
+                                       ov_retcode         => lv_retcode,
+                                       ort_sess_info      => lt_sess_info_str_type
+                                      );
+         
+         IF (lv_retcode = xx00ifcmn_const_sv.cv_error)
+         THEN
+            RAISE user_session_info_expt;
+         END IF;
+
+         lv_block := '1-1';
+
+         --Extracting the Legal Entity Id
+         BEGIN
+            
+            --SELECT legal_entity_id        /* 05-APR-2013 modify */
+            SELECT default_legal_context_id /* 05-APR-2013 modify */
+              INTO ln_xx01_legal_ent_id
+              FROM hr_operating_units
+             WHERE organization_id = lt_sess_info_str_type.org_id;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               lv_errbuf :=
+                     'Unable to extract the legal Entity Id for Org Id :'
+                  || lt_sess_info_str_type.org_id
+                  || ':'
+                  || SQLERRM;
+               RAISE l_exe_main_para_expt;
+         END;
+
+         /* 05-APR-2013 add start */
+         lv_block := '1-1-1';
+         IF (cv_tax_rege_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Regime Code for Profile : ' 
+               || 'XX00IFGL:Tax Regime Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Code for Profile : ' 
+               || 'XX00IFGL:Tax Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_stas_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Status Code for Profile : ' 
+               || 'XX00IFGL:Tax Status Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_jurn_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Jurisdiction Code for Profile : ' 
+               || 'XX00IFGL:Tax Jurisdiction Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_rate_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Rate Code for Profile : ' 
+               || 'XX00IFGL:Tax Rate Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cn_tax_rate IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Rate for Profile : ' 
+               || 'XX00IFGL:Tax Rate.';
+            RAISE l_exe_main_para_expt;
+         END IF;
+         /* 05-APR-2013 add end */
+
+         lv_block := '1-2';
+         
+         lv_period_name := iv_period_name;
+         lv_source_name := iv_source_name;
+         
+         lv_block := '1-2-1';
+         
+         -- Opening the Cursor for extracting Journal data 
+         -- Added this curosr to rollback data based on header
+         
+         --Del start Lib ver.4.02
+--         FOR get_gl_header_id_rec IN get_gl_header_id (lv_period_name, 
+--                                                       lv_source_name)                       
+--         LOOP
+--            BEGIN
+--            
+--            fnd_file.put_line (fnd_file.log, get_gl_header_id_rec.period_name||' '||get_gl_header_id_rec.user_je_source_name||' '||get_gl_header_id_rec.je_header_id);
+--            
+--            lv_block := '1-2-2';
+--            
+--               lv_chk_line_err := 'N';
+--               ln_proc_cnt_hdr := ln_proc_cnt_hdr + 1;
+--               /* 05-APR-2013 add start*/
+--               ln_proc_cnt_hdr_line := 0; 
+--               lv_je_header_num := TO_CHAR(xx00ifgl_je_header_num_seq.NEXTVAL);
+--               /* 05-APR-2013 add start */
+
+--               lv_block := '1-2-3';
+--               
+--               BEGIN
+--                  SELECT COUNT (*)
+--                    INTO ln_proc_cnt_line_temp
+--                    FROM xx00ifgl_inv_gl_journal_data
+--                   /* 05-APR-2013 modify start */
+--                   --WHERE je_header_id = get_gl_header_id_rec.je_header_id;
+--                   WHERE transaction_id = get_gl_header_id_rec.transaction_id
+--                     AND user_je_category_name = 
+--                         get_gl_header_id_rec.user_je_category_name;
+--                   /* 05-APR-2013 modify end */
+--               END;
+
+--               ln_proc_cnt_line := ln_proc_cnt_line + ln_proc_cnt_line_temp;
+
+--               lv_block := '2-0';
+--               --
+--               --Opening the Cursor for extracting Journal data 
+--               --
+--               FOR get_gl_new_data_rec IN
+--               /* 05-APR-2013 modify start */
+--                  --get_gl_new_data (get_gl_header_id_rec.je_header_id)
+--                     get_gl_new_data (                                
+--                                      get_gl_header_id_rec.transaction_id,             
+--                                      get_gl_header_id_rec.user_je_category_name,
+--                                      get_gl_header_id_rec.period_name,
+--                                      get_gl_header_id_rec.user_je_source_name
+--                                      )    
+--               /* 05-APR-2013 modify end */
+--               LOOP
+--                  BEGIN
+--                     
+--                     ln_proc_cnt_hdr_line := ln_proc_cnt_hdr_line + 1; /* 05-APR-2013 add */ 
+--                     lrt_xx00gl_interface := NULL;
+--                     lv_gl_err_msg := NULL;
+--                     lv_gl_err_msg := 'Error in extracting GL Data:';
+--                    
+--                     lv_block := '2-1';
+
+--                     BEGIN
+--                      
+--                        /* 05-APR-2013 modify start */
+--                        /*
+--                        lrt_xx00gl_interface.je_header_num :=
+--                                             get_gl_new_data_rec.je_header_id;
+--                        lrt_xx00gl_interface.je_line_num :=
+--                                              get_gl_new_data_rec.je_line_num;
+--                        */
+--                        -- modification start Lib_ver.4.01 
+--                        IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+--                        THEN 
+--                           lrt_xx00gl_interface.je_header_num := lv_je_header_num;
+--                        ELSE
+--                           lrt_xx00gl_interface.je_header_num := get_gl_new_data_rec.je_header_id;
+--                        END IF;
+--                        -- modification end Lib_ver.4.01 
+--                        
+--                        -- modification start Lib_ver.4.01 
+--                        --lrt_xx00gl_interface.je_line_num :=
+--                                                         --ln_proc_cnt_hdr_line;
+--                        IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+--                        THEN
+--                            lrt_xx00gl_interface.je_line_num := ln_proc_cnt_hdr_line;
+--                        ELSE
+--                           lrt_xx00gl_interface.je_line_num := get_gl_new_data_rec.je_line_num;
+--                        END IF;
+--                        -- modification end Lib_ver.4.01 
+--                        
+--                        lrt_xx00gl_interface.transaction_id :=
+--                                           get_gl_new_data_rec.transaction_id;
+--                        lrt_xx00gl_interface.org_id :=
+--                                                 lt_sess_info_str_type.org_id;
+--                        /* 05-APR-2013 modify end */
+--                        
+--                        lrt_xx00gl_interface.je_category_key :=
+--                                    get_gl_new_data_rec.user_je_category_name;
+--                        lrt_xx00gl_interface.user_je_source_name :=
+--                                      get_gl_new_data_rec.user_je_source_name;
+--                        lrt_xx00gl_interface.accounting_date :=
+--                                          get_gl_new_data_rec.accounting_date;
+--                        lv_block := '2-1-1';
+
+--                        -- modification start Lib_ver.4.01 
+--                        --IF get_gl_new_data_rec.entered_dr IS NULL
+--                        -- modification end Lib_ver.4.01
+--                        -- modification start Lib_ver.4.01 
+--                        /*IF NVL(get_gl_new_data_rec.entered_dr,0) = 0
+--                        THEN
+--                           lrt_xx00gl_interface.cr_dr_flag := 'C';
+--                        ELSE
+--                           lrt_xx00gl_interface.cr_dr_flag := 'D';
+--                        END IF;*/
+--                        IF (NVL(get_gl_new_data_rec.entered_dr,0) = 0
+--                          AND get_gl_new_data_rec.entered_cr > 0)
+--                         OR
+--                           (NVL(get_gl_new_data_rec.accounted_dr,0) = 0
+--                          AND get_gl_new_data_rec.accounted_cr > 0)                          
+--                        THEN
+--                           lrt_xx00gl_interface.cr_dr_flag := 'C';
+--                           get_gl_new_data_rec.entered_dr := NULL;
+--                        ELSIF (NVL(get_gl_new_data_rec.entered_cr,0) = 0
+--                          AND get_gl_new_data_rec.entered_dr > 0)
+--                          OR
+--                           (NVL(get_gl_new_data_rec.accounted_cr,0) = 0
+--                          AND get_gl_new_data_rec.accounted_dr > 0)                          
+--                        THEN
+--                           lrt_xx00gl_interface.cr_dr_flag := 'D';
+--                           get_gl_new_data_rec.entered_cr := NULL;
+--                        ELSIF get_gl_new_data_rec.entered_dr = 0
+--                          AND get_gl_new_data_rec.entered_cr = 0
+--                        THEN
+--                           lrt_xx00gl_interface.cr_dr_flag := 'D';
+--                           get_gl_new_data_rec.entered_cr := NULL;
+--                       /*Start of Code Added as per version 1.32*/
+--                       ELSIF (get_gl_new_data_rec.entered_dr > 0
+--                            AND get_gl_new_data_rec.entered_cr > 0)
+--                          OR
+--                            (get_gl_new_data_rec.accounted_dr > 0
+--                            AND get_gl_new_data_rec.accounted_cr > 0)
+--                        THEN
+--                           lv_insert_new_record := 'Y';
+--                           lv_credit_debit_flag := 'D';
+--                           ln_new_rec_entered_dr := get_gl_new_data_rec.entered_dr;
+--                           ln_new_rec_accounted_dr := get_gl_new_data_rec.accounted_dr;
+--                           get_gl_new_data_rec.entered_dr := NULL;
+--                           get_gl_new_data_rec.accounted_dr := NULL;
+--                           lrt_xx00gl_interface.cr_dr_flag := 'C';
+--                       /*End of Code Added as per version 1.32*/
+--                        END IF;
+--                        -- modification end Lib_ver.4.01 
+--                        
+--                        lv_block := '2-1-2';
+--                        BEGIN
+--                           SELECT segment1,
+--                                  segment2,
+--                                  segment3,
+--                                  segment4,
+--                                  segment5,
+--                                  segment6,
+--                                  segment7,
+--                                  segment8,
+--                                  segment9,
+--                                  segment10,
+--                                  segment11
+--                             INTO lrt_xx00gl_interface.segment1,
+--                                  lrt_xx00gl_interface.segment2,
+--                                  lrt_xx00gl_interface.segment3,
+--                                  lrt_xx00gl_interface.segment4,
+--                                  lrt_xx00gl_interface.segment5,
+--                                  lrt_xx00gl_interface.segment6,
+--                                  lrt_xx00gl_interface.segment7,
+--                                  lrt_xx00gl_interface.segment8,
+--                                  lrt_xx00gl_interface.segment9,
+--                                  lrt_xx00gl_interface.segment10,
+--                                  lrt_xx00gl_interface.segment11
+--                             FROM gl_code_combinations_kfv
+--                            WHERE code_combination_id =
+--                                       get_gl_new_data_rec.code_combination_id;
+--                        EXCEPTION
+--                           WHEN OTHERS
+--                           THEN
+--                              lv_gl_err_msg :=
+--                                 'Error while fetching the GL code combination data';
+--                              RAISE l_exe_gl_ins_expt;
+--                        END;
+
+--                        lv_block := '2-1-3';
+--                        
+--                        lrt_xx00gl_interface.period_name :=
+--                                               get_gl_new_data_rec.period_name;                                               
+--                        lrt_xx00gl_interface.reference1 := NULL;
+--                        lrt_xx00gl_interface.reference2 := NULL;
+--                        lrt_xx00gl_interface.reference4 := NULL;
+--                        -- modification start Lib_ver.4.01 
+--                        --lrt_xx00gl_interface.reference5 := get_gl_new_data_rec.je_header_id;
+--                                                --get_gl_new_data_rec.reference5;
+--                        IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+--                        THEN 
+--                           lrt_xx00gl_interface.reference5  := lv_je_header_num;
+--                        ELSE
+--                           lrt_xx00gl_interface.reference5 := get_gl_new_data_rec.je_header_id;
+--                        END IF;     
+--                        -- modification end Lib_ver.4.01       
+--                        lrt_xx00gl_interface.reference6 := NULL;
+--                        lrt_xx00gl_interface.reference7 :=
+--                                                get_gl_new_data_rec.reference7;
+--                        lrt_xx00gl_interface.reference8 :=
+--                                                get_gl_new_data_rec.reference8;
+--                        lrt_xx00gl_interface.reference9 :=
+--                                                get_gl_new_data_rec.reference9;
+--                        -- modification start Lib_ver.4.01    
+--                        --lrt_xx00gl_interface.reference10 :=
+--                                               --get_gl_new_data_rec.reference10;
+--                         /*
+--                         IF lrt_xx00gl_interface.reference10 IS NULL
+--                            AND get_gl_header_id_rec.user_je_source_name = 'T090593_L10_0008'
+--                            
+--                         THEN
+--                         
+--                            SELECT SUBSTR(a.reference4,10)
+--                            INTO   lrt_xx00gl_interface.reference10
+--                            FROM   gl_interface   a
+--                            WHERE  a.user_je_source_name = 'T090593_L10_0008'
+--                            AND    lrt_xx00gl_interface.je_header_num = a.je_header_id
+--                            AND    lrt_xx00gl_interface.je_line_num   = a.je_line_num;
+--                             
+--                         ELSE
+--                         
+--                            lrt_xx00gl_interface.reference10 :=
+--                                               get_gl_new_data_rec.reference10;
+--                                               
+--                         END IF;
+--                         */
+--                         IF get_gl_header_id_rec.user_je_source_name = 'T090593_L10_0008'
+--                            
+--                            THEN lrt_xx00gl_interface.reference10 := SUBSTR(get_gl_new_data_rec.reference4,10);
+--                         
+--                         ELSIF
+--                            get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+--                            
+--                            THEN 
+
+--                                SELECT distinct a.reference4||' '||c.vendor_name||' '||d.vendor_site_code
+--                                INTO   lrt_xx00gl_interface.reference10
+--                                FROM   rcv_receiving_sub_ledger a,
+--                                       rcv_transactions b,
+--                                       ap_suppliers c,
+--                                       --ap_supplier_sites_all d
+--                                       ap_supplier_sites d
+--                                WHERE  a.rcv_transaction_id = b.transaction_id
+--                                --AND    b.transaction_id = 135
+--                                AND    c.vendor_id = b.vendor_id
+--                                AND    c.vendor_id = d.vendor_id
+--                                AND    d.vendor_site_id = b.vendor_site_id
+--                                AND    lrt_xx00gl_interface.transaction_id = b.transaction_id
+--                                AND    lrt_xx00gl_interface.transaction_id = a.rcv_transaction_id;
+--                            
+--                         ELSE
+--                            lrt_xx00gl_interface.reference10 :=
+--                                               get_gl_new_data_rec.reference10;
+--                         
+--                         END IF;
+--                        -- modification end Lib_ver.4.01                           
+--                        lrt_xx00gl_interface.jgzz_recon_ref :=
+--                                            get_gl_new_data_rec.jgzz_recon_ref;
+--                        lv_block := '2-1-4';
+--                        /* 05-APR-2013 modify start */
+--                        /*
+--                        lrt_xx00gl_interface.tax_regime_code := NULL;
+--                        lrt_xx00gl_interface.tax :=
+--                                                  get_gl_new_data_rec.tax_code;
+--                        lrt_xx00gl_interface.tax_status_code := NULL;
+--                        lrt_xx00gl_interface.tax_jurisdiction_code := NULL;
+--                        lrt_xx00gl_interface.tax_rate_code := NULL;
+--                        lrt_xx00gl_interface.tax_rate := NULL;
+--                        */
+--                        IF    get_gl_new_data_rec.tax_regime_code IS NULL
+--                          AND get_gl_new_data_rec.tax_code IS NULL
+--                          AND get_gl_new_data_rec.tax_status_code IS NULL
+--                          AND get_gl_new_data_rec.tax_jurisdiction_code IS NULL
+--                          AND get_gl_new_data_rec.tax_rate_code IS NULL
+--                          AND get_gl_new_data_rec.tax_rate IS NULL
+--                        THEN
+--                           lrt_xx00gl_interface.tax_regime_code := cv_tax_rege_code;
+--                           lrt_xx00gl_interface.tax := cv_tax_code;
+--                           lrt_xx00gl_interface.tax_status_code := cv_tax_stas_code;
+--                           lrt_xx00gl_interface.tax_jurisdiction_code := cv_tax_jurn_code;
+--                           lrt_xx00gl_interface.tax_rate_code := cv_tax_rate_code;
+--                           lrt_xx00gl_interface.tax_rate := cn_tax_rate;
+--                        ELSE
+--                        lv_block := '2-1-5';
+--                           lrt_xx00gl_interface.tax_regime_code := 
+--                                           get_gl_new_data_rec.tax_regime_code;
+--                           lrt_xx00gl_interface.tax := 
+--                                                  get_gl_new_data_rec.tax_code;
+--                           lrt_xx00gl_interface.tax_status_code := 
+--                                           get_gl_new_data_rec.tax_status_code;
+--                           lrt_xx00gl_interface.tax_jurisdiction_code := 
+--                                     get_gl_new_data_rec.tax_jurisdiction_code;
+--                           lrt_xx00gl_interface.tax_jurisdiction_code := 
+--                                             get_gl_new_data_rec.tax_rate_code;
+--                           lrt_xx00gl_interface.tax_rate := 
+--                                                  get_gl_new_data_rec.tax_rate;
+--                        END IF;
+--                        /* 05-APR-2013 modify end */
+--                        lv_block := '2-1-6';
+--                        lrt_xx00gl_interface.tax_line_group :=
+--                                               get_gl_new_data_rec.reference11;
+--                                               lv_block := '2-1-6.1';
+--                        lrt_xx00gl_interface.attribute1 :=
+--                                                get_gl_new_data_rec.attribute1;
+--                                                lv_block := '2-1-6.2';
+--                        lrt_xx00gl_interface.attribute2 :=
+--                                                get_gl_new_data_rec.attribute2;
+--                                                lv_block := '2-1-6.3';
+--                        lrt_xx00gl_interface.attribute3 :=
+--                                                get_gl_new_data_rec.attribute3;
+--                                                lv_block := '2-1-6.4';
+--                        lrt_xx00gl_interface.attribute4 :=
+--                                                get_gl_new_data_rec.attribute4;
+--                        lrt_xx00gl_interface.attribute5 :=
+--                                                get_gl_new_data_rec.attribute5;
+--                                                lv_block := '2-1-6.5';
+--                        lrt_xx00gl_interface.attribute6 :=
+--                                                get_gl_new_data_rec.attribute6;
+--                        lrt_xx00gl_interface.attribute7 :=
+--                                                get_gl_new_data_rec.attribute7;
+--                        lrt_xx00gl_interface.attribute8 :=
+--                                                get_gl_new_data_rec.attribute8;
+--                                                lv_block := '2-1-6.6';
+--                        lrt_xx00gl_interface.attribute9 :=
+--                                                get_gl_new_data_rec.attribute9;
+--                        lrt_xx00gl_interface.attribute10 :=
+--                                               get_gl_new_data_rec.attribute10;                       
+--                        -- modification start Lib_ver.4.01 
+--                        lv_block := '2-1-7';                        
+--                        IF lrt_xx00gl_interface.attribute11 IS NULL
+--                            AND lrt_xx00gl_interface.user_je_source_name = 'Cost Management' --RECEIVING TRX                                               
+--                        THEN
+--                        
+--                        BEGIN
+--                        
+--                            SELECT b.vendor_site_code --.VENDOR_SITE_ID 
+--                            INTO   lrt_xx00gl_interface.attribute11
+--                            FROM   rcv_transactions       a
+--                            -- modification start Lib_ver.4.01 
+--                                  --,ap_supplier_sites_all  b
+--                                  ,ap_supplier_sites  b
+--                            -- modification start Lib_ver.4.01 
+--                            WHERE a.vendor_site_id = b.vendor_site_id
+--                            AND   a.transaction_id = lrt_xx00gl_interface.transaction_id  --7009 
+--                            AND   a.destination_type_code = 'RECEIVING';
+--                        
+--                        EXCEPTION
+--                        WHEN OTHERS
+--                        THEN
+--                           lv_gl_err_msg :=   
+--                                 (   lv_gl_err_msg
+--                                  || ' .Error in fetching vendor site code: '
+--                                  || get_gl_new_data_rec.transaction_id
+--                                  || ':'
+--                                  || SQLERRM
+--                                 );                          
+--                        END;
+--                            
+--                        lv_block := '2-1-8';
+--                        ELSE lrt_xx00gl_interface.attribute11 := 
+--                                        gv_attribute11_ifc; 
+--                            
+--                       END IF;
+--                       -- modification end Lib_ver.4.01 
+--                        lv_block := '2-1-9';
+--                        lrt_xx00gl_interface.attribute12 :=
+--                                               get_gl_new_data_rec.attribute12;
+--                        lrt_xx00gl_interface.attribute13 :=
+--                                               get_gl_new_data_rec.attribute13;
+--                        lrt_xx00gl_interface.attribute14 :=
+--                                               get_gl_new_data_rec.attribute14;
+--                        lrt_xx00gl_interface.attribute15 :=
+--                                               get_gl_new_data_rec.attribute15;
+--                        lrt_xx00gl_interface.attribute16 :=
+--                                               get_gl_new_data_rec.attribute16;
+--                        lrt_xx00gl_interface.attribute17 :=
+--                                               get_gl_new_data_rec.attribute17;
+--                        lrt_xx00gl_interface.attribute18 :=
+--                                               get_gl_new_data_rec.attribute18;
+--                        lrt_xx00gl_interface.attribute19 :=
+--                                               get_gl_new_data_rec.attribute19;
+--                        lrt_xx00gl_interface.attribute20 :=
+--                                               get_gl_new_data_rec.attribute20;
+--                        lv_block := '2-1-10';
+--                        lrt_xx00gl_interface.xx_attribute1 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute2 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute3 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute4 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute5 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute6 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute7 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute8 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute9 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute10 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute11 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute12 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute13 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute14 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute15 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute16 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute17 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute18 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute19 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute20 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute21 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute22 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute23 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute24 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute25 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute26 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute27 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute28 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute29 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute30 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute31 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute32 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute33 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute34 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute35 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute36 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute37 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute38 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute39 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute40 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute41 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute42 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute43 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute44 := NULL;
+--                        lrt_xx00gl_interface.xx_attribute45 := NULL;
+--                        lv_block := '2-1-11';
+--                        lrt_xx00gl_interface.entered_dr :=
+--                                                get_gl_new_data_rec.entered_dr;
+--                        lrt_xx00gl_interface.entered_cr :=
+--                                                get_gl_new_data_rec.entered_cr;
+--                        lrt_xx00gl_interface.accounted_dr :=
+--                                              get_gl_new_data_rec.accounted_dr;
+--                        lrt_xx00gl_interface.accounted_cr :=
+--                                              get_gl_new_data_rec.accounted_cr;
+--                        lv_block := '2-1-12';
+--                        lrt_xx00gl_interface.currency_code :=
+--                                             get_gl_new_data_rec.currency_code;
+--                        lv_block := '2-1-13';
+--                        lrt_xx00gl_interface.currency_conversion_date :=
+--                                  get_gl_new_data_rec.currency_conversion_date;
+--                        lv_block := '2-1-14';
+--                        lrt_xx00gl_interface.user_currency_conversion_type :=
+--                             get_gl_new_data_rec.user_currency_conversion_type;
+--                        lv_block := '2-1-15';
+--                        lrt_xx00gl_interface.currency_conversion_rate :=
+--                                  get_gl_new_data_rec.currency_conversion_rate;
+--                        lv_block := '2-1-16';
+--                        lrt_xx00gl_interface.code_combination_id :=
+--                                       get_gl_new_data_rec.code_combination_id;
+--                        lv_block := '2-1-17';
+--                        
+--                         
+--                        lrt_xx00gl_interface.status :=
+--                        -- modification start Lib_ver.4.01
+--                                                    cv_status; 
+--                                                    --get_gl_new_data_rec.status;
+--                        -- modification end Lib_ver.4.01 
+--                        
+--                        lv_block := '2-1-18';
+--                        lrt_xx00gl_interface.actual_flag :=
+--                                               get_gl_new_data_rec.actual_flag;
+--                        lv_block := '2-1-19';
+--                        lrt_xx00gl_interface.ledger_name := gv_xx01ledg_name;
+--                        lv_block := '2-1-20';                          
+--                        lrt_xx00gl_interface.process_status :=
+--                                               xx00ifcmn_const_sv.cv_extracted;
+--                        lrt_xx00gl_interface.error_flag := NULL;
+--                        lrt_xx00gl_interface.error_message := NULL;
+--                        lv_block := '2-1-21';    
+--                        lrt_xx00gl_interface.legal_entity_id :=
+--                                                          ln_xx01_legal_ent_id;
+--                        lrt_xx00gl_interface.created_by :=
+--                                                 lt_sess_info_str_type.user_id;
+--                        lrt_xx00gl_interface.creation_date := gd_xx02_sysdate;
+--                        lrt_xx00gl_interface.last_updated_by :=
+--                                                 lt_sess_info_str_type.user_id;
+--                        lrt_xx00gl_interface.last_update_date :=
+--                                                               gd_xx02_sysdate;
+--                        lrt_xx00gl_interface.last_update_login :=
+--                                                lt_sess_info_str_type.login_id;
+--                        lrt_xx00gl_interface.request_id :=
+--                                         lt_sess_info_str_type.conc_request_id;
+--                        lrt_xx00gl_interface.program_application_id :=
+--                                            lt_sess_info_str_type.prog_appl_id;
+--                        lrt_xx00gl_interface.program_id :=
+--                                         lt_sess_info_str_type.conc_program_id;
+--                        lrt_xx00gl_interface.program_update_date :=
+--                                                               gd_xx02_sysdate;
+--                     EXCEPTION
+--                        WHEN OTHERS
+--                        THEN
+--                           lv_gl_err_msg :=
+--                                 lv_gl_err_msg
+--                              || 'Error while assigning the values to the GL IF Record: '||lv_block
+--                              || SQLERRM;
+--                           RAISE l_exe_gl_ins_expt;
+--                     END;
+
+--                     lv_block := '2-2';
+
+--                     --
+--                     --Calling populate_gl_stg for insertion into staging table
+--                     --
+--                     BEGIN
+--                        xx00ifgl_interface_conc_sv.populate_gl_stg (lv_gl_err_msg_add,
+--                                         lv_retcode,
+--                                         lrt_xx00gl_interface
+--                                        );
+
+--                        IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+--                        THEN                          
+--fnd_file.put_line(fnd_file.log,'xxx-0');
+--                           lv_gl_err_msg :=
+--                              SUBSTR (lv_gl_err_msg || lv_gl_err_msg_add,
+--                                      1,
+--                                      4000
+--                                     );
+--                           RAISE l_exe_gl_ins_expt;
+--                
+--                        ELSE     
+--                            
+--                            IF lrt_xx00gl_interface.user_je_source_name in ('Payroll',
+--                                                                    'T090593_L10_0006',
+--                                                                    'T090593_L10_0008')   
+--                            THEN 
+--fnd_file.put_line(fnd_file.log,'xxx-1');                
+--                                UPDATE gl_interface
+--                                SET    status = 'INTERFACED'
+----                                WHERE  je_line_num = ln_proc_cnt_hdr_line--lv_je_line_num--get_gl_new_data_rec.je_line_num
+----                                AND    je_header_id = lv_je_header_num;--ln_proc_cnt_hdr_line;--get_gl_new_data_rec.je_header_id;
+--                                WHERE je_line_num = get_gl_new_data_rec.je_line_num
+--                                AND je_header_id = get_gl_new_data_rec.je_header_id;
+--                                
+--                            ELSE
+--fnd_file.put_line(fnd_file.log,'xxx-2');
+--                                UPDATE rcv_receiving_sub_ledger
+--                                SET attribute11 = 'I'
+--                                WHERE rcv_transaction_id = lrt_xx00gl_interface.transaction_id;
+
+--                            END IF;
+--                            COMMIT; 
+--                        END IF;
+--                        
+--                     END;
+
+--                     lv_block := '2-3';
+
+--                     /* 05-APR-2013 delete start */ 
+--                     /*
+--                     UPDATE gl_interface
+--                        SET status = 'INTERFACED'
+--                      WHERE je_line_num = get_gl_new_data_rec.je_line_num
+--                        AND je_header_id = get_gl_new_data_rec.je_header_id;
+--                     */ 
+--                     /* 05-APR-2013 delete end */ 
+
+--                     lv_block := '2-4';
+--                  --
+--                  --End of  Loop
+--                  --
+--                  EXCEPTION
+--                     WHEN l_exe_gl_ins_expt
+--                     THEN                        
+--                        lv_chk_line_err := 'Y';                        
+--                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+--                        ROLLBACK;
+--                     WHEN OTHERS
+--                     THEN                        
+--                        lv_chk_line_err := 'Y';
+--                        lv_gl_err_msg :=
+--                              lv_gl_err_msg
+--                           || SUBSTRB (   cv_proc_name
+--                                       || cv_period
+--                                       || lv_block
+--                                       || cv_delimiter_msg
+--                                       || SQLERRM,
+--                                       1,
+--                                       5000
+--                                      );
+--                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+--                        ROLLBACK;
+--                  END;
+--                 
+--                  lv_block := '2-5';
+--               END LOOP;
+
+--               IF lv_chk_line_err = 'Y'
+--               THEN
+--                  
+--                  lv_gl_err_msg :=
+--                     /* 05-APR-2013 modify start */
+--                     --   'Error occured while Inserting Line Details. Header Id '
+--                     --|| get_gl_header_id_rec.je_header_id
+--                        'Error occured while Inserting Line Details. '
+--                     || 'Category name - Transaction Id ' 
+--                     || get_gl_header_id_rec.user_je_category_name
+--                     || '-'
+--                     || get_gl_header_id_rec.transaction_id
+--                     /* 05-APR-2013 modify end */
+--                     || ' is rollbacked';
+--                  xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+--                  ROLLBACK;
+--               ELSE
+--                  
+--                  COMMIT;
+--               END IF;
+--            END;
+--         END LOOP;
+         --Del end Lib ver.4.02
+         
+         --Add start Lib ver.4.02
+         IF lv_source_name = 'Cost Management'
+         THEN
+                 FOR get_gl_header_id_rec IN get_gl_header_id_rcv(lv_period_name)                        
+                 LOOP
+                    BEGIN
+            
+                    fnd_file.put_line (fnd_file.log, get_gl_header_id_rec.period_name||' '||get_gl_header_id_rec.user_je_source_name||' '||get_gl_header_id_rec.je_header_id);
+            
+                    lv_block := '1-2-2';
+            
+                       lv_chk_line_err := 'N';
+                       ln_proc_cnt_hdr := ln_proc_cnt_hdr + 1;
+                       ln_proc_cnt_hdr_line := 0; 
+                       lv_je_header_num := TO_CHAR(xx00ifgl_je_header_num_seq.NEXTVAL);
+                
+
+                       lv_block := '1-2-3';
+               
+                       BEGIN
+                           IF lv_source_name = 'Cost Management'
+                           THEN
+                                SELECT COUNT(*)
+                                INTO ln_proc_cnt_line_temp
+                                FROM   rcv_receiving_sub_ledger rrsl 
+                                      ,rcv_transactions rt
+                                WHERE  rrsl.rcv_transaction_id = rt.transaction_id
+                                AND rrsl.rcv_transaction_id = get_gl_header_id_rec.transaction_id
+                                AND rrsl.period_name = get_gl_header_id_rec.period_name;
+                           ELSE
+                                SELECT COUNT(*)
+                                INTO ln_proc_cnt_line_temp
+                                FROM gl_interface gl
+                                WHERE gl.je_header_id = get_gl_header_id_rec.transaction_id
+                                AND gl.period_name = get_gl_header_id_rec.period_name
+                                AND gl.user_je_source_name = get_gl_header_id_rec.user_je_source_name;
+                           END IF;
+                   
+
+                       END;
+
+                       ln_proc_cnt_line := ln_proc_cnt_line + ln_proc_cnt_line_temp;
+
+                       lv_block := '2-0';
+                       --
+                       --Opening the Cursor for extracting Journal data 
+                       --
+                       FOR get_gl_new_data_rec IN
+                             get_gl_new_data_rcv (                                
+                                                 get_gl_header_id_rec.transaction_id,             
+                                                 get_gl_header_id_rec.period_name
+                                                 )    
+                 
+                       LOOP
+                          BEGIN
+                     
+                             ln_proc_cnt_hdr_line := ln_proc_cnt_hdr_line + 1;
+                             lrt_xx00gl_interface := NULL;
+                             lv_gl_err_msg := NULL;
+                             lv_gl_err_msg := 'Error in extracting GL Data:';
+                    
+                             lv_block := '2-1';
+
+                             BEGIN
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN 
+                                   lrt_xx00gl_interface.je_header_num := lv_je_header_num;
+                                ELSE
+                                   lrt_xx00gl_interface.je_header_num := get_gl_new_data_rec.je_header_id;
+                                END IF;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN
+                                    lrt_xx00gl_interface.je_line_num := ln_proc_cnt_hdr_line;
+                                ELSE
+                                   lrt_xx00gl_interface.je_line_num := get_gl_new_data_rec.je_line_num;
+                                END IF;
+                                 
+                        
+                                lrt_xx00gl_interface.transaction_id :=
+                                                   get_gl_new_data_rec.transaction_id;
+                                lrt_xx00gl_interface.org_id :=
+                                                         lt_sess_info_str_type.org_id;
+                                
+                        
+                                lrt_xx00gl_interface.je_category_key :=
+                                            get_gl_new_data_rec.user_je_category_name;
+                                lrt_xx00gl_interface.user_je_source_name :=
+                                              get_gl_new_data_rec.user_je_source_name;
+                                lrt_xx00gl_interface.accounting_date :=
+                                                  get_gl_new_data_rec.accounting_date;
+                                lv_block := '2-1-1';
+
+                                
+                                IF (NVL(get_gl_new_data_rec.entered_dr,0) = 0
+                                  AND get_gl_new_data_rec.entered_cr > 0)
+                                 OR
+                                   (NVL(get_gl_new_data_rec.accounted_dr,0) = 0
+                                  AND get_gl_new_data_rec.accounted_cr > 0)                          
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'C';
+                                   get_gl_new_data_rec.entered_dr := NULL;
+                                ELSIF (NVL(get_gl_new_data_rec.entered_cr,0) = 0
+                                  AND get_gl_new_data_rec.entered_dr > 0)
+                                  OR
+                                   (NVL(get_gl_new_data_rec.accounted_cr,0) = 0
+                                  AND get_gl_new_data_rec.accounted_dr > 0)                          
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'D';
+                                   get_gl_new_data_rec.entered_cr := NULL;
+                                ELSIF get_gl_new_data_rec.entered_dr = 0
+                                  AND get_gl_new_data_rec.entered_cr = 0
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'D';
+                                   get_gl_new_data_rec.entered_cr := NULL;
+                               ELSIF (get_gl_new_data_rec.entered_dr > 0
+                                    AND get_gl_new_data_rec.entered_cr > 0)
+                                  OR
+                                    (get_gl_new_data_rec.accounted_dr > 0
+                                    AND get_gl_new_data_rec.accounted_cr > 0)
+                                THEN
+                                   lv_insert_new_record := 'Y';
+                                   lv_credit_debit_flag := 'D';
+                                   ln_new_rec_entered_dr := get_gl_new_data_rec.entered_dr;
+                                   ln_new_rec_accounted_dr := get_gl_new_data_rec.accounted_dr;
+                                   get_gl_new_data_rec.entered_dr := NULL;
+                                   get_gl_new_data_rec.accounted_dr := NULL;
+                                   lrt_xx00gl_interface.cr_dr_flag := 'C';
+                                END IF;
+                                 
+                        
+                                lv_block := '2-1-2';
+                                BEGIN
+                                   SELECT segment1,
+                                          segment2,
+                                          segment3,
+                                          segment4,
+                                          segment5,
+                                          segment6,
+                                          segment7,
+                                          segment8,
+                                          segment9,
+                                          segment10,
+                                          segment11
+                                     INTO lrt_xx00gl_interface.segment1,
+                                          lrt_xx00gl_interface.segment2,
+                                          lrt_xx00gl_interface.segment3,
+                                          lrt_xx00gl_interface.segment4,
+                                          lrt_xx00gl_interface.segment5,
+                                          lrt_xx00gl_interface.segment6,
+                                          lrt_xx00gl_interface.segment7,
+                                          lrt_xx00gl_interface.segment8,
+                                          lrt_xx00gl_interface.segment9,
+                                          lrt_xx00gl_interface.segment10,
+                                          lrt_xx00gl_interface.segment11
+                                     FROM gl_code_combinations_kfv
+                                    WHERE code_combination_id =
+                                               get_gl_new_data_rec.code_combination_id;
+                                EXCEPTION
+                                   WHEN OTHERS
+                                   THEN
+                                      lv_gl_err_msg :=
+                                         'Error while fetching the GL code combination data';
+                                      RAISE l_exe_gl_ins_expt;
+                                END;
+
+                                lv_block := '2-1-3';
+                        
+                                lrt_xx00gl_interface.period_name :=
+                                                       get_gl_new_data_rec.period_name;                                               
+                                lrt_xx00gl_interface.reference1 := NULL;
+                                lrt_xx00gl_interface.reference2 := NULL;
+                                lrt_xx00gl_interface.reference4 := NULL;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN 
+                                   lrt_xx00gl_interface.reference5  := lv_je_header_num;
+                                ELSE
+                                   lrt_xx00gl_interface.reference5 := get_gl_new_data_rec.je_header_id;
+                                END IF;     
+                                       
+                                lrt_xx00gl_interface.reference6 := NULL;
+                                lrt_xx00gl_interface.reference7 :=
+                                                        get_gl_new_data_rec.reference7;
+                                lrt_xx00gl_interface.reference8 :=
+                                                        get_gl_new_data_rec.reference8;
+                                lrt_xx00gl_interface.reference9 :=
+                                                        get_gl_new_data_rec.reference9;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'T090593_L10_0008'
+                            
+                                    THEN lrt_xx00gl_interface.reference10 := SUBSTR(get_gl_new_data_rec.reference4,10);
+                         
+                                 ELSIF
+                                    get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                            
+                                    THEN 
+
+                                        SELECT distinct a.reference4||' '||c.vendor_name||' '||d.vendor_site_code
+                                        INTO   lrt_xx00gl_interface.reference10
+                                        FROM   rcv_receiving_sub_ledger a,
+                                               rcv_transactions b,
+                                               ap_suppliers c,
+                                               ap_supplier_sites d
+                                        WHERE  a.rcv_transaction_id = b.transaction_id
+                                        AND    c.vendor_id = b.vendor_id
+                                        AND    c.vendor_id = d.vendor_id
+                                        AND    d.vendor_site_id = b.vendor_site_id
+                                        AND    lrt_xx00gl_interface.transaction_id = b.transaction_id
+                                        AND    lrt_xx00gl_interface.transaction_id = a.rcv_transaction_id;
+                            
+                                 ELSE
+                                    lrt_xx00gl_interface.reference10 :=
+                                                       get_gl_new_data_rec.reference10;
+                         
+                                 END IF;
+                                                           
+                                lrt_xx00gl_interface.jgzz_recon_ref :=
+                                                    get_gl_new_data_rec.jgzz_recon_ref;
+                                lv_block := '2-1-4';
+                                
+                                
+                                IF    get_gl_new_data_rec.tax_regime_code IS NULL
+                                  AND get_gl_new_data_rec.tax_code IS NULL
+                                  AND get_gl_new_data_rec.tax_status_code IS NULL
+                                  AND get_gl_new_data_rec.tax_jurisdiction_code IS NULL
+                                  AND get_gl_new_data_rec.tax_rate_code IS NULL
+                                  AND get_gl_new_data_rec.tax_rate IS NULL
+                                THEN
+                                   lrt_xx00gl_interface.tax_regime_code := cv_tax_rege_code;
+                                   lrt_xx00gl_interface.tax := cv_tax_code;
+                                   lrt_xx00gl_interface.tax_status_code := cv_tax_stas_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := cv_tax_jurn_code;
+                                   lrt_xx00gl_interface.tax_rate_code := cv_tax_rate_code;
+                                   lrt_xx00gl_interface.tax_rate := cn_tax_rate;
+                                ELSE
+                                lv_block := '2-1-5';
+                                   lrt_xx00gl_interface.tax_regime_code := 
+                                                   get_gl_new_data_rec.tax_regime_code;
+                                   lrt_xx00gl_interface.tax := 
+                                                          get_gl_new_data_rec.tax_code;
+                                   lrt_xx00gl_interface.tax_status_code := 
+                                                   get_gl_new_data_rec.tax_status_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := 
+                                             get_gl_new_data_rec.tax_jurisdiction_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := 
+                                                     get_gl_new_data_rec.tax_rate_code;
+                                   lrt_xx00gl_interface.tax_rate := 
+                                                          get_gl_new_data_rec.tax_rate;
+                                END IF;
+                                
+                                lv_block := '2-1-6';
+                                lrt_xx00gl_interface.tax_line_group :=
+                                                       get_gl_new_data_rec.reference11;
+                                                       lv_block := '2-1-6.1';
+                                lrt_xx00gl_interface.attribute1 :=
+                                                        get_gl_new_data_rec.attribute1;
+                                                        lv_block := '2-1-6.2';
+                                lrt_xx00gl_interface.attribute2 :=
+                                                        get_gl_new_data_rec.attribute2;
+                                                        lv_block := '2-1-6.3';
+                                lrt_xx00gl_interface.attribute3 :=
+                                                        get_gl_new_data_rec.attribute3;
+                                                        lv_block := '2-1-6.4';
+                                lrt_xx00gl_interface.attribute4 :=
+                                                        get_gl_new_data_rec.attribute4;
+                                lrt_xx00gl_interface.attribute5 :=
+                                                        get_gl_new_data_rec.attribute5;
+                                                        lv_block := '2-1-6.5';
+                                lrt_xx00gl_interface.attribute6 :=
+                                                        get_gl_new_data_rec.attribute6;
+                                lrt_xx00gl_interface.attribute7 :=
+                                                        get_gl_new_data_rec.attribute7;
+                                lrt_xx00gl_interface.attribute8 :=
+                                                        get_gl_new_data_rec.attribute8;
+                                                        lv_block := '2-1-6.6';
+                                lrt_xx00gl_interface.attribute9 :=
+                                                        get_gl_new_data_rec.attribute9;
+                                lrt_xx00gl_interface.attribute10 :=
+                                                       get_gl_new_data_rec.attribute10;                       
+                                 
+                                lv_block := '2-1-7';                        
+                                IF lrt_xx00gl_interface.attribute11 IS NULL
+                                    AND lrt_xx00gl_interface.user_je_source_name = 'Cost Management' --RECEIVING TRX                                               
+                                THEN
+                        
+                                BEGIN
+                        
+                                    SELECT b.vendor_site_code  
+                                    INTO   lrt_xx00gl_interface.attribute11
+                                    FROM   rcv_transactions       a
+                                          ,ap_supplier_sites  b
+                                    WHERE a.vendor_site_id = b.vendor_site_id
+                                    AND   a.transaction_id = lrt_xx00gl_interface.transaction_id  --7009 
+                                    AND   a.destination_type_code = 'RECEIVING';
+                        
+                                EXCEPTION
+                                WHEN OTHERS
+                                THEN
+                                   lv_gl_err_msg :=   
+                                         (   lv_gl_err_msg
+                                          || ' .Error in fetching vendor site code: '
+                                          || get_gl_new_data_rec.transaction_id
+                                          || ':'
+                                          || SQLERRM
+                                         );                          
+                                END;
+                            
+                                lv_block := '2-1-8';
+                                ELSE lrt_xx00gl_interface.attribute11 := 
+                                                gv_attribute11_ifc; 
+                            
+                               END IF;
+                                
+                                lv_block := '2-1-9';
+                                lrt_xx00gl_interface.attribute12 :=
+                                                       get_gl_new_data_rec.attribute12;
+                                lrt_xx00gl_interface.attribute13 :=
+                                                       get_gl_new_data_rec.attribute13;
+                                lrt_xx00gl_interface.attribute14 :=
+                                                       get_gl_new_data_rec.attribute14;
+                                lrt_xx00gl_interface.attribute15 :=
+                                                       get_gl_new_data_rec.attribute15;
+                                lrt_xx00gl_interface.attribute16 :=
+                                                       get_gl_new_data_rec.attribute16;
+                                lrt_xx00gl_interface.attribute17 :=
+                                                       get_gl_new_data_rec.attribute17;
+                                lrt_xx00gl_interface.attribute18 :=
+                                                       get_gl_new_data_rec.attribute18;
+                                lrt_xx00gl_interface.attribute19 :=
+                                                       get_gl_new_data_rec.attribute19;
+                                lrt_xx00gl_interface.attribute20 :=
+                                                       get_gl_new_data_rec.attribute20;
+                                lv_block := '2-1-10';
+                                lrt_xx00gl_interface.xx_attribute1 := NULL;
+                                lrt_xx00gl_interface.xx_attribute2 := NULL;
+                                lrt_xx00gl_interface.xx_attribute3 := NULL;
+                                lrt_xx00gl_interface.xx_attribute4 := NULL;
+                                lrt_xx00gl_interface.xx_attribute5 := NULL;
+                                lrt_xx00gl_interface.xx_attribute6 := NULL;
+                                lrt_xx00gl_interface.xx_attribute7 := NULL;
+                                lrt_xx00gl_interface.xx_attribute8 := NULL;
+                                lrt_xx00gl_interface.xx_attribute9 := NULL;
+                                lrt_xx00gl_interface.xx_attribute10 := NULL;
+                                lrt_xx00gl_interface.xx_attribute11 := NULL;
+                                lrt_xx00gl_interface.xx_attribute12 := NULL;
+                                lrt_xx00gl_interface.xx_attribute13 := NULL;
+                                lrt_xx00gl_interface.xx_attribute14 := NULL;
+                                lrt_xx00gl_interface.xx_attribute15 := NULL;
+                                lrt_xx00gl_interface.xx_attribute16 := NULL;
+                                lrt_xx00gl_interface.xx_attribute17 := NULL;
+                                lrt_xx00gl_interface.xx_attribute18 := NULL;
+                                lrt_xx00gl_interface.xx_attribute19 := NULL;
+                                lrt_xx00gl_interface.xx_attribute20 := NULL;
+                                lrt_xx00gl_interface.xx_attribute21 := NULL;
+                                lrt_xx00gl_interface.xx_attribute22 := NULL;
+                                lrt_xx00gl_interface.xx_attribute23 := NULL;
+                                lrt_xx00gl_interface.xx_attribute24 := NULL;
+                                lrt_xx00gl_interface.xx_attribute25 := NULL;
+                                lrt_xx00gl_interface.xx_attribute26 := NULL;
+                                lrt_xx00gl_interface.xx_attribute27 := NULL;
+                                lrt_xx00gl_interface.xx_attribute28 := NULL;
+                                lrt_xx00gl_interface.xx_attribute29 := NULL;
+                                lrt_xx00gl_interface.xx_attribute30 := NULL;
+                                lrt_xx00gl_interface.xx_attribute31 := NULL;
+                                lrt_xx00gl_interface.xx_attribute32 := NULL;
+                                lrt_xx00gl_interface.xx_attribute33 := NULL;
+                                lrt_xx00gl_interface.xx_attribute34 := NULL;
+                                lrt_xx00gl_interface.xx_attribute35 := NULL;
+                                lrt_xx00gl_interface.xx_attribute36 := NULL;
+                                lrt_xx00gl_interface.xx_attribute37 := NULL;
+                                lrt_xx00gl_interface.xx_attribute38 := NULL;
+                                lrt_xx00gl_interface.xx_attribute39 := NULL;
+                                lrt_xx00gl_interface.xx_attribute40 := NULL;
+                                lrt_xx00gl_interface.xx_attribute41 := NULL;
+                                lrt_xx00gl_interface.xx_attribute42 := NULL;
+                                lrt_xx00gl_interface.xx_attribute43 := NULL;
+                                lrt_xx00gl_interface.xx_attribute44 := NULL;
+                                lrt_xx00gl_interface.xx_attribute45 := NULL;
+                                lv_block := '2-1-11';
+                                lrt_xx00gl_interface.entered_dr :=
+                                                        get_gl_new_data_rec.entered_dr;
+                                lrt_xx00gl_interface.entered_cr :=
+                                                        get_gl_new_data_rec.entered_cr;
+                                lrt_xx00gl_interface.accounted_dr :=
+                                                      get_gl_new_data_rec.accounted_dr;
+                                lrt_xx00gl_interface.accounted_cr :=
+                                                      get_gl_new_data_rec.accounted_cr;
+                                lv_block := '2-1-12';
+                                lrt_xx00gl_interface.currency_code :=
+                                                     get_gl_new_data_rec.currency_code;
+                                lv_block := '2-1-13';
+                                lrt_xx00gl_interface.currency_conversion_date :=
+                                          get_gl_new_data_rec.currency_conversion_date;
+                                lv_block := '2-1-14';
+                                lrt_xx00gl_interface.user_currency_conversion_type :=
+                                     get_gl_new_data_rec.user_currency_conversion_type;
+                                lv_block := '2-1-15';
+                                lrt_xx00gl_interface.currency_conversion_rate :=
+                                          get_gl_new_data_rec.currency_conversion_rate;
+                                lv_block := '2-1-16';
+                                lrt_xx00gl_interface.code_combination_id :=
+                                               get_gl_new_data_rec.code_combination_id;
+                                lv_block := '2-1-17';
+                        
+                         
+                                lrt_xx00gl_interface.status :=
+                                                      cv_status; 
+                                                      
+                        
+                                lv_block := '2-1-18';
+                                lrt_xx00gl_interface.actual_flag :=
+                                                       get_gl_new_data_rec.actual_flag;
+                                lv_block := '2-1-19';
+                                lrt_xx00gl_interface.ledger_name := gv_xx01ledg_name;
+                                lv_block := '2-1-20';                          
+                                lrt_xx00gl_interface.process_status :=
+                                                       xx00ifcmn_const_sv.cv_extracted;
+                                lrt_xx00gl_interface.error_flag := NULL;
+                                lrt_xx00gl_interface.error_message := NULL;
+                                lv_block := '2-1-21';    
+                                lrt_xx00gl_interface.legal_entity_id :=
+                                                                  ln_xx01_legal_ent_id;
+                                lrt_xx00gl_interface.created_by :=
+                                                         lt_sess_info_str_type.user_id;
+                                lrt_xx00gl_interface.creation_date := gd_xx02_sysdate;
+                                lrt_xx00gl_interface.last_updated_by :=
+                                                         lt_sess_info_str_type.user_id;
+                                lrt_xx00gl_interface.last_update_date :=
+                                                                       gd_xx02_sysdate;
+                                lrt_xx00gl_interface.last_update_login :=
+                                                        lt_sess_info_str_type.login_id;
+                                lrt_xx00gl_interface.request_id :=
+                                                 lt_sess_info_str_type.conc_request_id;
+                                lrt_xx00gl_interface.program_application_id :=
+                                                    lt_sess_info_str_type.prog_appl_id;
+                                lrt_xx00gl_interface.program_id :=
+                                                 lt_sess_info_str_type.conc_program_id;
+                                lrt_xx00gl_interface.program_update_date :=
+                                                                       gd_xx02_sysdate;
+                             EXCEPTION
+                                WHEN OTHERS
+                                THEN
+                                   lv_gl_err_msg :=
+                                         lv_gl_err_msg
+                                      || 'Error while assigning the values to the GL IF Record: '||lv_block
+                                      || SQLERRM;
+                                   RAISE l_exe_gl_ins_expt;
+                             END;
+
+                             lv_block := '2-2';
+
+                             --
+                             --Calling populate_gl_stg for insertion into staging table
+                             --
+                             BEGIN
+                                xx00ifgl_interface_conc_sv.populate_gl_stg (lv_gl_err_msg_add,
+                                                 lv_retcode,
+                                                 lrt_xx00gl_interface
+                                                );
+
+                                IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                                THEN                          
+                                fnd_file.put_line(fnd_file.log,'xxx-0');
+                                   lv_gl_err_msg :=
+                                      SUBSTR (lv_gl_err_msg || lv_gl_err_msg_add,
+                                              1,
+                                              4000
+                                             );
+                                   RAISE l_exe_gl_ins_expt;
+                
+                                ELSE     
+                            
+                                    IF lrt_xx00gl_interface.user_je_source_name in ('Payroll',
+                                                                            'T090593_L10_0006',
+                                                                            'T090593_L10_0008')   
+                                    THEN 
+                                    fnd_file.put_line(fnd_file.log,'xxx-1');                
+                                        UPDATE gl_interface
+                                        SET    status = 'INTERFACED'
+                                        WHERE je_line_num = get_gl_new_data_rec.je_line_num
+                                        AND je_header_id = get_gl_new_data_rec.je_header_id;
+                                
+                                    ELSE
+                                    fnd_file.put_line(fnd_file.log,'xxx-2');
+                                        UPDATE rcv_receiving_sub_ledger
+                                        SET attribute11 = 'I'
+                                        WHERE rcv_transaction_id = lrt_xx00gl_interface.transaction_id;
+
+                                    END IF;
+                                    COMMIT; 
+                                END IF;
+                        
+                             END;
+
+                             lv_block := '2-3';
+
+                             
+                             lv_block := '2-4';
+                          --
+                          --End of  Loop
+                          --
+                          EXCEPTION
+                             WHEN l_exe_gl_ins_expt
+                             THEN                        
+                                lv_chk_line_err := 'Y';                        
+                                xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                                ROLLBACK;
+                             WHEN OTHERS
+                             THEN                        
+                                lv_chk_line_err := 'Y';
+                                lv_gl_err_msg :=
+                                      lv_gl_err_msg
+                                   || SUBSTRB (   cv_proc_name
+                                               || cv_period
+                                               || lv_block
+                                               || cv_delimiter_msg
+                                               || SQLERRM,
+                                               1,
+                                               5000
+                                              );
+                                xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                                ROLLBACK;
+                          END;
+                 
+                          lv_block := '2-5';
+                       END LOOP;
+
+                       IF lv_chk_line_err = 'Y'
+                       THEN
+                  
+                          lv_gl_err_msg :=
+                                'Error occured while Inserting Line Details. '
+                             || 'Category name - Transaction Id ' 
+                             || get_gl_header_id_rec.user_je_category_name
+                             || '-'
+                             || get_gl_header_id_rec.transaction_id
+                             || ' is rollbacked';
+                          xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                          ROLLBACK;
+                       ELSE
+                  
+                          COMMIT;
+                       END IF;
+                    END;
+                 END LOOP;
+        ELSE
+                FOR get_gl_header_id_rec IN get_gl_header_id_gl(lv_period_name
+                                                               ,lv_source_name)                        
+                 LOOP
+                    BEGIN
+            
+                    fnd_file.put_line (fnd_file.log, get_gl_header_id_rec.period_name||' '||get_gl_header_id_rec.user_je_source_name||' '||get_gl_header_id_rec.je_header_id);
+            
+                    lv_block := '1-2-2';
+            
+                       lv_chk_line_err := 'N';
+                       ln_proc_cnt_hdr := ln_proc_cnt_hdr + 1;
+                       ln_proc_cnt_hdr_line := 0; 
+                       lv_je_header_num := TO_CHAR(xx00ifgl_je_header_num_seq.NEXTVAL);
+                       
+
+                       lv_block := '1-2-3';
+               
+                       BEGIN
+                           IF lv_source_name = 'Cost Management'
+                           THEN
+                                SELECT COUNT(*)
+                                INTO ln_proc_cnt_line_temp
+                                FROM   rcv_receiving_sub_ledger rrsl 
+                                      ,rcv_transactions rt
+                                WHERE  rrsl.rcv_transaction_id = rt.transaction_id
+                                AND rrsl.rcv_transaction_id = get_gl_header_id_rec.transaction_id
+                                AND rrsl.period_name = get_gl_header_id_rec.period_name;
+                           ELSE
+                                SELECT COUNT(*)
+                                INTO ln_proc_cnt_line_temp
+                                FROM gl_interface gl
+                                WHERE gl.je_header_id = get_gl_header_id_rec.transaction_id
+                                AND gl.period_name = get_gl_header_id_rec.period_name
+                                AND gl.user_je_source_name = get_gl_header_id_rec.user_je_source_name;
+                           END IF;
+                   
+                       
+                       END;
+
+                       ln_proc_cnt_line := ln_proc_cnt_line + ln_proc_cnt_line_temp;
+
+                       lv_block := '2-0';
+                       --
+                       --Opening the Cursor for extracting Journal data 
+                       --
+                       FOR get_gl_new_data_rec IN
+                             get_gl_new_data_gl (                                
+                                                 get_gl_header_id_rec.transaction_id,             
+                                                 get_gl_header_id_rec.period_name,
+                                                 get_gl_header_id_rec.user_je_source_name
+                                                )      
+                      
+                       LOOP
+                          BEGIN
+                     
+                             ln_proc_cnt_hdr_line := ln_proc_cnt_hdr_line + 1;  
+                             lrt_xx00gl_interface := NULL;
+                             lv_gl_err_msg := NULL;
+                             lv_gl_err_msg := 'Error in extracting GL Data:';
+                    
+                             lv_block := '2-1';
+
+                             BEGIN
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN 
+                                   lrt_xx00gl_interface.je_header_num := lv_je_header_num;
+                                ELSE
+                                   lrt_xx00gl_interface.je_header_num := get_gl_new_data_rec.je_header_id;
+                                END IF;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN
+                                    lrt_xx00gl_interface.je_line_num := ln_proc_cnt_hdr_line;
+                                ELSE
+                                   lrt_xx00gl_interface.je_line_num := get_gl_new_data_rec.je_line_num;
+                                END IF;
+                                 
+                        
+                                lrt_xx00gl_interface.transaction_id :=
+                                                   get_gl_new_data_rec.transaction_id;
+                                lrt_xx00gl_interface.org_id :=
+                                                         lt_sess_info_str_type.org_id;
+                                
+                        
+                                lrt_xx00gl_interface.je_category_key :=
+                                            get_gl_new_data_rec.user_je_category_name;
+                                lrt_xx00gl_interface.user_je_source_name :=
+                                              get_gl_new_data_rec.user_je_source_name;
+                                lrt_xx00gl_interface.accounting_date :=
+                                                  get_gl_new_data_rec.accounting_date;
+                                lv_block := '2-1-1';
+
+                                
+                                IF (NVL(get_gl_new_data_rec.entered_dr,0) = 0
+                                  AND get_gl_new_data_rec.entered_cr > 0)
+                                 OR
+                                   (NVL(get_gl_new_data_rec.accounted_dr,0) = 0
+                                  AND get_gl_new_data_rec.accounted_cr > 0)                          
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'C';
+                                   get_gl_new_data_rec.entered_dr := NULL;
+                                ELSIF (NVL(get_gl_new_data_rec.entered_cr,0) = 0
+                                  AND get_gl_new_data_rec.entered_dr > 0)
+                                  OR
+                                   (NVL(get_gl_new_data_rec.accounted_cr,0) = 0
+                                  AND get_gl_new_data_rec.accounted_dr > 0)                          
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'D';
+                                   get_gl_new_data_rec.entered_cr := NULL;
+                                ELSIF get_gl_new_data_rec.entered_dr = 0
+                                  AND get_gl_new_data_rec.entered_cr = 0
+                                THEN
+                                   lrt_xx00gl_interface.cr_dr_flag := 'D';
+                                   get_gl_new_data_rec.entered_cr := NULL;
+                                ELSIF (get_gl_new_data_rec.entered_dr > 0
+                                    AND get_gl_new_data_rec.entered_cr > 0)
+                                  OR
+                                    (get_gl_new_data_rec.accounted_dr > 0
+                                    AND get_gl_new_data_rec.accounted_cr > 0)
+                                THEN
+                                   lv_insert_new_record := 'Y';
+                                   lv_credit_debit_flag := 'D';
+                                   ln_new_rec_entered_dr := get_gl_new_data_rec.entered_dr;
+                                   ln_new_rec_accounted_dr := get_gl_new_data_rec.accounted_dr;
+                                   get_gl_new_data_rec.entered_dr := NULL;
+                                   get_gl_new_data_rec.accounted_dr := NULL;
+                                   lrt_xx00gl_interface.cr_dr_flag := 'C';
+                               END IF;
+                                
+                        
+                                lv_block := '2-1-2';
+                                BEGIN
+                                   SELECT segment1,
+                                          segment2,
+                                          segment3,
+                                          segment4,
+                                          segment5,
+                                          segment6,
+                                          segment7,
+                                          segment8,
+                                          segment9,
+                                          segment10,
+                                          segment11
+                                     INTO lrt_xx00gl_interface.segment1,
+                                          lrt_xx00gl_interface.segment2,
+                                          lrt_xx00gl_interface.segment3,
+                                          lrt_xx00gl_interface.segment4,
+                                          lrt_xx00gl_interface.segment5,
+                                          lrt_xx00gl_interface.segment6,
+                                          lrt_xx00gl_interface.segment7,
+                                          lrt_xx00gl_interface.segment8,
+                                          lrt_xx00gl_interface.segment9,
+                                          lrt_xx00gl_interface.segment10,
+                                          lrt_xx00gl_interface.segment11
+                                     FROM gl_code_combinations_kfv
+                                    WHERE code_combination_id =
+                                               get_gl_new_data_rec.code_combination_id;
+                                EXCEPTION
+                                   WHEN OTHERS
+                                   THEN
+                                      lv_gl_err_msg :=
+                                         'Error while fetching the GL code combination data';
+                                      RAISE l_exe_gl_ins_expt;
+                                END;
+
+                                lv_block := '2-1-3';
+                        
+                                lrt_xx00gl_interface.period_name :=
+                                                       get_gl_new_data_rec.period_name;                                               
+                                lrt_xx00gl_interface.reference1 := NULL;
+                                lrt_xx00gl_interface.reference2 := NULL;
+                                lrt_xx00gl_interface.reference4 := NULL;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                                THEN 
+                                   lrt_xx00gl_interface.reference5  := lv_je_header_num;
+                                ELSE
+                                   lrt_xx00gl_interface.reference5 := get_gl_new_data_rec.je_header_id;
+                                END IF;     
+                                       
+                                lrt_xx00gl_interface.reference6 := NULL;
+                                lrt_xx00gl_interface.reference7 :=
+                                                        get_gl_new_data_rec.reference7;
+                                lrt_xx00gl_interface.reference8 :=
+                                                        get_gl_new_data_rec.reference8;
+                                lrt_xx00gl_interface.reference9 :=
+                                                        get_gl_new_data_rec.reference9;
+                                
+                                
+                                IF get_gl_header_id_rec.user_je_source_name = 'T090593_L10_0008'
+                            
+                                    THEN lrt_xx00gl_interface.reference10 := SUBSTR(get_gl_new_data_rec.reference4,10);
+                         
+                                 ELSIF
+                                    get_gl_header_id_rec.user_je_source_name = 'Cost Management'
+                            
+                                    THEN 
+
+                                        SELECT distinct a.reference4||' '||c.vendor_name||' '||d.vendor_site_code
+                                        INTO   lrt_xx00gl_interface.reference10
+                                        FROM   rcv_receiving_sub_ledger a,
+                                               rcv_transactions b,
+                                               ap_suppliers c,
+                                               ap_supplier_sites d
+                                        WHERE  a.rcv_transaction_id = b.transaction_id
+                                        AND    c.vendor_id = b.vendor_id
+                                        AND    c.vendor_id = d.vendor_id
+                                        AND    d.vendor_site_id = b.vendor_site_id
+                                        AND    lrt_xx00gl_interface.transaction_id = b.transaction_id
+                                        AND    lrt_xx00gl_interface.transaction_id = a.rcv_transaction_id;
+                            
+                                 ELSE
+                                    lrt_xx00gl_interface.reference10 :=
+                                                       get_gl_new_data_rec.reference10;
+                         
+                                 END IF;
+                                                  
+                                lrt_xx00gl_interface.jgzz_recon_ref :=
+                                                    get_gl_new_data_rec.jgzz_recon_ref;
+                                lv_block := '2-1-4';
+                                
+                                
+                                IF    get_gl_new_data_rec.tax_regime_code IS NULL
+                                  AND get_gl_new_data_rec.tax_code IS NULL
+                                  AND get_gl_new_data_rec.tax_status_code IS NULL
+                                  AND get_gl_new_data_rec.tax_jurisdiction_code IS NULL
+                                  AND get_gl_new_data_rec.tax_rate_code IS NULL
+                                  AND get_gl_new_data_rec.tax_rate IS NULL
+                                THEN
+                                   lrt_xx00gl_interface.tax_regime_code := cv_tax_rege_code;
+                                   lrt_xx00gl_interface.tax := cv_tax_code;
+                                   lrt_xx00gl_interface.tax_status_code := cv_tax_stas_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := cv_tax_jurn_code;
+                                   lrt_xx00gl_interface.tax_rate_code := cv_tax_rate_code;
+                                   lrt_xx00gl_interface.tax_rate := cn_tax_rate;
+                                ELSE
+                                lv_block := '2-1-5';
+                                   lrt_xx00gl_interface.tax_regime_code := 
+                                                   get_gl_new_data_rec.tax_regime_code;
+                                   lrt_xx00gl_interface.tax := 
+                                                          get_gl_new_data_rec.tax_code;
+                                   lrt_xx00gl_interface.tax_status_code := 
+                                                   get_gl_new_data_rec.tax_status_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := 
+                                             get_gl_new_data_rec.tax_jurisdiction_code;
+                                   lrt_xx00gl_interface.tax_jurisdiction_code := 
+                                                     get_gl_new_data_rec.tax_rate_code;
+                                   lrt_xx00gl_interface.tax_rate := 
+                                                          get_gl_new_data_rec.tax_rate;
+                                END IF;
+                               
+                                lv_block := '2-1-6';
+                                lrt_xx00gl_interface.tax_line_group :=
+                                                       get_gl_new_data_rec.reference11;
+                                                       lv_block := '2-1-6.1';
+                                lrt_xx00gl_interface.attribute1 :=
+                                                        get_gl_new_data_rec.attribute1;
+                                                        lv_block := '2-1-6.2';
+                                lrt_xx00gl_interface.attribute2 :=
+                                                        get_gl_new_data_rec.attribute2;
+                                                        lv_block := '2-1-6.3';
+                                lrt_xx00gl_interface.attribute3 :=
+                                                        get_gl_new_data_rec.attribute3;
+                                                        lv_block := '2-1-6.4';
+                                lrt_xx00gl_interface.attribute4 :=
+                                                        get_gl_new_data_rec.attribute4;
+                                lrt_xx00gl_interface.attribute5 :=
+                                                        get_gl_new_data_rec.attribute5;
+                                                        lv_block := '2-1-6.5';
+                                lrt_xx00gl_interface.attribute6 :=
+                                                        get_gl_new_data_rec.attribute6;
+                                lrt_xx00gl_interface.attribute7 :=
+                                                        get_gl_new_data_rec.attribute7;
+                                lrt_xx00gl_interface.attribute8 :=
+                                                        get_gl_new_data_rec.attribute8;
+                                                        lv_block := '2-1-6.6';
+                                lrt_xx00gl_interface.attribute9 :=
+                                                        get_gl_new_data_rec.attribute9;
+                                lrt_xx00gl_interface.attribute10 :=
+                                                       get_gl_new_data_rec.attribute10;                       
+                                 
+                                lv_block := '2-1-7';                        
+                                IF lrt_xx00gl_interface.attribute11 IS NULL
+                                    AND lrt_xx00gl_interface.user_je_source_name = 'Cost Management' --RECEIVING TRX                                               
+                                THEN
+                        
+                                BEGIN
+                        
+                                    SELECT b.vendor_site_code 
+                                    INTO   lrt_xx00gl_interface.attribute11
+                                    FROM   rcv_transactions       a
+                                          ,ap_supplier_sites  b
+                                    WHERE a.vendor_site_id = b.vendor_site_id
+                                    AND   a.transaction_id = lrt_xx00gl_interface.transaction_id  --7009 
+                                    AND   a.destination_type_code = 'RECEIVING';
+                        
+                                EXCEPTION
+                                WHEN OTHERS
+                                THEN
+                                   lv_gl_err_msg :=   
+                                         (   lv_gl_err_msg
+                                          || ' .Error in fetching vendor site code: '
+                                          || get_gl_new_data_rec.transaction_id
+                                          || ':'
+                                          || SQLERRM
+                                         );                          
+                                END;
+                            
+                                lv_block := '2-1-8';
+                                ELSE lrt_xx00gl_interface.attribute11 := 
+                                                gv_attribute11_ifc; 
+                            
+                               END IF;
+                                
+                                lv_block := '2-1-9';
+                                lrt_xx00gl_interface.attribute12 :=
+                                                       get_gl_new_data_rec.attribute12;
+                                lrt_xx00gl_interface.attribute13 :=
+                                                       get_gl_new_data_rec.attribute13;
+                                lrt_xx00gl_interface.attribute14 :=
+                                                       get_gl_new_data_rec.attribute14;
+                                lrt_xx00gl_interface.attribute15 :=
+                                                       get_gl_new_data_rec.attribute15;
+                                lrt_xx00gl_interface.attribute16 :=
+                                                       get_gl_new_data_rec.attribute16;
+                                lrt_xx00gl_interface.attribute17 :=
+                                                       get_gl_new_data_rec.attribute17;
+                                lrt_xx00gl_interface.attribute18 :=
+                                                       get_gl_new_data_rec.attribute18;
+                                lrt_xx00gl_interface.attribute19 :=
+                                                       get_gl_new_data_rec.attribute19;
+                                lrt_xx00gl_interface.attribute20 :=
+                                                       get_gl_new_data_rec.attribute20;
+                                lv_block := '2-1-10';
+                                lrt_xx00gl_interface.xx_attribute1 := NULL;
+                                lrt_xx00gl_interface.xx_attribute2 := NULL;
+                                lrt_xx00gl_interface.xx_attribute3 := NULL;
+                                lrt_xx00gl_interface.xx_attribute4 := NULL;
+                                lrt_xx00gl_interface.xx_attribute5 := NULL;
+                                lrt_xx00gl_interface.xx_attribute6 := NULL;
+                                lrt_xx00gl_interface.xx_attribute7 := NULL;
+                                lrt_xx00gl_interface.xx_attribute8 := NULL;
+                                lrt_xx00gl_interface.xx_attribute9 := NULL;
+                                lrt_xx00gl_interface.xx_attribute10 := NULL;
+                                lrt_xx00gl_interface.xx_attribute11 := NULL;
+                                lrt_xx00gl_interface.xx_attribute12 := NULL;
+                                lrt_xx00gl_interface.xx_attribute13 := NULL;
+                                lrt_xx00gl_interface.xx_attribute14 := NULL;
+                                lrt_xx00gl_interface.xx_attribute15 := NULL;
+                                lrt_xx00gl_interface.xx_attribute16 := NULL;
+                                lrt_xx00gl_interface.xx_attribute17 := NULL;
+                                lrt_xx00gl_interface.xx_attribute18 := NULL;
+                                lrt_xx00gl_interface.xx_attribute19 := NULL;
+                                lrt_xx00gl_interface.xx_attribute20 := NULL;
+                                lrt_xx00gl_interface.xx_attribute21 := NULL;
+                                lrt_xx00gl_interface.xx_attribute22 := NULL;
+                                lrt_xx00gl_interface.xx_attribute23 := NULL;
+                                lrt_xx00gl_interface.xx_attribute24 := NULL;
+                                lrt_xx00gl_interface.xx_attribute25 := NULL;
+                                lrt_xx00gl_interface.xx_attribute26 := NULL;
+                                lrt_xx00gl_interface.xx_attribute27 := NULL;
+                                lrt_xx00gl_interface.xx_attribute28 := NULL;
+                                lrt_xx00gl_interface.xx_attribute29 := NULL;
+                                lrt_xx00gl_interface.xx_attribute30 := NULL;
+                                lrt_xx00gl_interface.xx_attribute31 := NULL;
+                                lrt_xx00gl_interface.xx_attribute32 := NULL;
+                                lrt_xx00gl_interface.xx_attribute33 := NULL;
+                                lrt_xx00gl_interface.xx_attribute34 := NULL;
+                                lrt_xx00gl_interface.xx_attribute35 := NULL;
+                                lrt_xx00gl_interface.xx_attribute36 := NULL;
+                                lrt_xx00gl_interface.xx_attribute37 := NULL;
+                                lrt_xx00gl_interface.xx_attribute38 := NULL;
+                                lrt_xx00gl_interface.xx_attribute39 := NULL;
+                                lrt_xx00gl_interface.xx_attribute40 := NULL;
+                                lrt_xx00gl_interface.xx_attribute41 := NULL;
+                                lrt_xx00gl_interface.xx_attribute42 := NULL;
+                                lrt_xx00gl_interface.xx_attribute43 := NULL;
+                                lrt_xx00gl_interface.xx_attribute44 := NULL;
+                                lrt_xx00gl_interface.xx_attribute45 := NULL;
+                                lv_block := '2-1-11';
+                                lrt_xx00gl_interface.entered_dr :=
+                                                        get_gl_new_data_rec.entered_dr;
+                                lrt_xx00gl_interface.entered_cr :=
+                                                        get_gl_new_data_rec.entered_cr;
+                                lrt_xx00gl_interface.accounted_dr :=
+                                                      get_gl_new_data_rec.accounted_dr;
+                                lrt_xx00gl_interface.accounted_cr :=
+                                                      get_gl_new_data_rec.accounted_cr;
+                                lv_block := '2-1-12';
+                                lrt_xx00gl_interface.currency_code :=
+                                                     get_gl_new_data_rec.currency_code;
+                                lv_block := '2-1-13';
+                                lrt_xx00gl_interface.currency_conversion_date :=
+                                          get_gl_new_data_rec.currency_conversion_date;
+                                lv_block := '2-1-14';
+                                lrt_xx00gl_interface.user_currency_conversion_type :=
+                                     get_gl_new_data_rec.user_currency_conversion_type;
+                                lv_block := '2-1-15';
+                                lrt_xx00gl_interface.currency_conversion_rate :=
+                                          get_gl_new_data_rec.currency_conversion_rate;
+                                lv_block := '2-1-16';
+                                lrt_xx00gl_interface.code_combination_id :=
+                                               get_gl_new_data_rec.code_combination_id;
+                                lv_block := '2-1-17';
+                        
+                         
+                                lrt_xx00gl_interface.status :=
+                                                       cv_status; 
+                                
+                        
+                                lv_block := '2-1-18';
+                                lrt_xx00gl_interface.actual_flag :=
+                                                       get_gl_new_data_rec.actual_flag;
+                                lv_block := '2-1-19';
+                                lrt_xx00gl_interface.ledger_name := gv_xx01ledg_name;
+                                lv_block := '2-1-20';                          
+                                lrt_xx00gl_interface.process_status :=
+                                                       xx00ifcmn_const_sv.cv_extracted;
+                                lrt_xx00gl_interface.error_flag := NULL;
+                                lrt_xx00gl_interface.error_message := NULL;
+                                lv_block := '2-1-21';    
+                                lrt_xx00gl_interface.legal_entity_id :=
+                                                                  ln_xx01_legal_ent_id;
+                                lrt_xx00gl_interface.created_by :=
+                                                         lt_sess_info_str_type.user_id;
+                                lrt_xx00gl_interface.creation_date := gd_xx02_sysdate;
+                                lrt_xx00gl_interface.last_updated_by :=
+                                                         lt_sess_info_str_type.user_id;
+                                lrt_xx00gl_interface.last_update_date :=
+                                                                       gd_xx02_sysdate;
+                                lrt_xx00gl_interface.last_update_login :=
+                                                        lt_sess_info_str_type.login_id;
+                                lrt_xx00gl_interface.request_id :=
+                                                 lt_sess_info_str_type.conc_request_id;
+                                lrt_xx00gl_interface.program_application_id :=
+                                                    lt_sess_info_str_type.prog_appl_id;
+                                lrt_xx00gl_interface.program_id :=
+                                                 lt_sess_info_str_type.conc_program_id;
+                                lrt_xx00gl_interface.program_update_date :=
+                                                                       gd_xx02_sysdate;
+                             EXCEPTION
+                                WHEN OTHERS
+                                THEN
+                                   lv_gl_err_msg :=
+                                         lv_gl_err_msg
+                                      || 'Error while assigning the values to the GL IF Record: '||lv_block
+                                      || SQLERRM;
+                                   RAISE l_exe_gl_ins_expt;
+                             END;
+
+                             lv_block := '2-2';
+
+                             --
+                             --Calling populate_gl_stg for insertion into staging table
+                             --
+                             BEGIN
+                                xx00ifgl_interface_conc_sv.populate_gl_stg (lv_gl_err_msg_add,
+                                                 lv_retcode,
+                                                 lrt_xx00gl_interface
+                                                );
+
+                                IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                                THEN                          
+                                fnd_file.put_line(fnd_file.log,'xxx-0');
+                                   lv_gl_err_msg :=
+                                      SUBSTR (lv_gl_err_msg || lv_gl_err_msg_add,
+                                              1,
+                                              4000
+                                             );
+                                   RAISE l_exe_gl_ins_expt;
+                
+                                ELSE     
+                            
+                                    IF lrt_xx00gl_interface.user_je_source_name in ('Payroll',
+                                                                            'T090593_L10_0006',
+                                                                            'T090593_L10_0008')   
+                                    THEN 
+                                    fnd_file.put_line(fnd_file.log,'xxx-1');                
+                                        UPDATE gl_interface
+                                        SET    status = 'INTERFACED'
+                                        WHERE je_line_num = get_gl_new_data_rec.je_line_num
+                                        AND je_header_id = get_gl_new_data_rec.je_header_id;
+                                
+                                    ELSE
+                                    fnd_file.put_line(fnd_file.log,'xxx-2');
+                                        UPDATE rcv_receiving_sub_ledger
+                                        SET attribute11 = 'I'
+                                        WHERE rcv_transaction_id = lrt_xx00gl_interface.transaction_id;
+
+                                    END IF;
+                                    COMMIT; 
+                                END IF;
+                        
+                             END;
+
+                             lv_block := '2-3';
+
+
+                             lv_block := '2-4';
+                          --
+                          --End of  Loop
+                          --
+                          EXCEPTION
+                             WHEN l_exe_gl_ins_expt
+                             THEN                        
+                                lv_chk_line_err := 'Y';                        
+                                xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                                ROLLBACK;
+                             WHEN OTHERS
+                             THEN                        
+                                lv_chk_line_err := 'Y';
+                                lv_gl_err_msg :=
+                                      lv_gl_err_msg
+                                   || SUBSTRB (   cv_proc_name
+                                               || cv_period
+                                               || lv_block
+                                               || cv_delimiter_msg
+                                               || SQLERRM,
+                                               1,
+                                               5000
+                                              );
+                                xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                                ROLLBACK;
+                          END;
+                 
+                          lv_block := '2-5';
+                       END LOOP;
+
+                       IF lv_chk_line_err = 'Y'
+                       THEN
+                  
+                          lv_gl_err_msg :=
+                                'Error occured while Inserting Line Details. '
+                             || 'Category name - Transaction Id ' 
+                             || get_gl_header_id_rec.user_je_category_name
+                             || '-'
+                             || get_gl_header_id_rec.transaction_id
+                             || ' is rollbacked';
+                          xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                          ROLLBACK;
+                       ELSE
+                  
+                          COMMIT;
+                       END IF;
+                    END;
+                 END LOOP;
+        
+        END IF;
+       --Add end Lib ver.4.02 
+        
+
+         lv_block := '3-0';
+         ov_retcode := xx00ifcmn_const_sv.cv_success;
+         ov_errbuf := NULL;
+--
+--End of Main Block
+--
+      EXCEPTION
+         WHEN l_exe_main_para_expt
+         THEN
+            lv_errbuf :=
+                  lv_errbuf
+               || SUBSTRB (   cv_proc_name
+                           || cv_period
+                           || lv_block
+                           || cv_delimiter_msg,
+                           1,
+                           5000
+                          );
+            -- set out parameter
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to outlog            
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);         
+         WHEN user_session_info_expt
+         THEN                           
+            -- set out parameter
+            lv_errbuf :=
+                  lv_errbuf
+               || SUBSTRB (   cv_proc_name
+                           || cv_period
+                           || lv_block
+                           || cv_delimiter_msg,
+                           1,
+                           5000
+                          );
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to outlog
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         --
+         WHEN OTHERS
+         THEN
+            -- set out parameter
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to concurrent log
+            fnd_file.put_line (fnd_file.LOG, ov_errbuf);
+            ROLLBACK;
+      END;
+
+      lv_block := '4-0';
+      BEGIN
+         BEGIN
+            SELECT fcp.concurrent_program_name,
+                   fcpt.user_concurrent_program_name
+              INTO lv_program_short_name,
+                   lv_program_name
+              FROM fnd_concurrent_programs_tl fcpt,
+                   fnd_concurrent_programs fcp
+             WHERE fcp.concurrent_program_id = fcpt.concurrent_program_id
+               AND fcpt.language = userenv('LANG') /* 05-APR-2013 add */
+               AND fcp.concurrent_program_id =
+                                         lt_sess_info_str_type.conc_program_id;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               lv_program_short_name := NULL;
+               lv_program_name := NULL;
+         END;
+
+         lv_block := '4-1';
+         IF ov_retcode = xx00ifcmn_const_sv.cv_success
+         THEN
+            lt_msg_footer_atype (1) := lv_program_name || ' is normal ended';
+         ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+         THEN
+            lt_msg_footer_atype (1) := lv_program_name || ' is normal error';
+         ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+         THEN
+            lt_msg_footer_atype (1) :=
+                                      lv_program_name || ' is normal warning';
+         END IF;
+
+         ld_date_input := SYSDATE;
+
+         lv_block := '4-2';
+         BEGIN
+            SELECT COUNT (DISTINCT je_header_num)
+              INTO ln_norm_proc_cnt_hdr
+              FROM xx00ifgl_journal_stg
+             WHERE request_id = lt_sess_info_str_type.conc_request_id;
+         END;
+
+         BEGIN
+            SELECT COUNT (*)
+              INTO ln_norm_proc_cnt_line
+              FROM xx00ifgl_journal_stg
+             WHERE request_id = lt_sess_info_str_type.conc_request_id;
+         END;
+
+         lv_block := '4-3';
+         ln_err_proc_cnt_hdr := ln_proc_cnt_hdr - ln_norm_proc_cnt_hdr;
+         ln_err_proc_cnt_line := ln_proc_cnt_line - ln_norm_proc_cnt_line;
+         xx00ifcmn_conc_outp_sv.cmn_conc_outp
+                                       (lv_errbuf,
+                                        lv_retcode,
+                                        gd_xx02_sysdate,                                        
+                                        lt_sess_info_str_type.org_name,
+                                        lt_sess_info_str_type.conc_request_id,
+                                        lv_program_short_name,
+                                        lv_program_name,
+                                        lt_msg_line_atype,
+                                        'Y',  
+                                        ln_proc_cnt_hdr,                                       
+                                        ln_proc_cnt_line,                                        
+                                        ln_norm_proc_cnt_hdr,                                        
+                                        ln_norm_proc_cnt_line,                                      
+                                        ln_err_proc_cnt_hdr,                                        
+                                        ln_err_proc_cnt_line,                                      
+                                        lt_msg_footer_atype,
+                                        ld_date_input                                       
+                                       );
+
+         IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+         THEN
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+         ELSE
+        ov_retcode := xx00ifcmn_const_sv.cv_success;
+            ov_errbuf := lv_program_name||' Completed Successfully';
+         END IF;
+      END;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         -- set out parameter
+         ov_errbuf :=
+            SUBSTRB (   cv_proc_name
+                     || cv_period
+                     || lv_block
+                     || cv_delimiter_msg
+                     || SQLERRM,
+                     1,
+                     5000
+                    );
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         -- output to concurrent log
+         xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         ROLLBACK;
+   END main_extr;
+
+/********************************************************************************************************
+
+*  Procedure Name       :   update_gl_sequences 
+
+*  Description          :   Update header id and line number of records in GL Interface
+
+********************************************************************************************************/
+   PROCEDURE update_gl_sequences (
+      ov_errbuf         OUT   VARCHAR2,                          --   error message
+      ov_retcode        OUT   VARCHAR2,                          --   return code
+      iv_source_name     IN   VARCHAR2,
+-- modification start Lib_ver.4.01 
+      iv_period_name     IN   VARCHAR2  --set parameter for gl_sequence program 
+-- modification end Lib_ver.4.01       
+   )
+   IS
+--
+
+      --Local Variable Declaration
+
+      --
+
+      -- ===============================
+
+      -- local Constant
+
+      -- ===============================
+      cv_proc_name       CONSTANT VARCHAR2 (100)     := 'update_gl_sequences';
+-- procedure name
+      cv_proc_desc       CONSTANT VARCHAR2 (50)
+                                          := 'GL Interface Sequence Updation';
+      cv_period          CONSTANT VARCHAR2 (1)                         := '.';
+      cv_delimiter_msg   CONSTANT VARCHAR2 (1)                         := '|';
+      cv_space           CONSTANT VARCHAR2 (3)                         := '   ';
+                                                         -- message delimiter
+      lv_errbuf                   VARCHAR2 (4000);           -- error message
+      lv_err_msg_add              VARCHAR2 (4000);           -- error message
+      l_hdr_ins_expt              EXCEPTION;
+      lv_retcode                  VARCHAR2 (1);                -- return code
+      lv_errmsg                   VARCHAR2 (4000);         -- user error code
+      lv_block                    VARCHAR2 (10);      -- process block number
+      lt_sess_info_str_type       xx00ifcmn_conc_init_proc_sv.sess_info_str_type;
+      lt_msg_line_atype           xx00ifcmn_conc_outp_sv.message_line_atype;
+      lt_msg_footer_atype         xx00ifcmn_conc_outp_sv.message_footer_atype;
+      ln_je_header_id             NUMBER;
+      ln_je_line_num              NUMBER;
+      lv_error_message            VARCHAR2 (1000);
+      ln_process_count            NUMBER                                 := 0;
+      ln_record_count             NUMBER                                 := 0;
+      ln_error_count              NUMBER                                 := 0;
+      ld_date_input               DATE;
+      lv_program_short_name       VARCHAR2 (150);
+      lv_program_name             VARCHAR2 (150);
+      ln_line_count               NUMBER                                 := 0;
+      ln_line_count_Temp          NUMBER                                 := 0;
+      ln_process_count_line       NUMBER                                 := 0;
+      ln_error_count_line         NUMBER                                 := 0;  
+      user_session_info_expt      EXCEPTION;
+
+      ln_count_one                NUMBER := 0;
+      ln_count_two                NUMBER := 0;
+   -- modification start Lib_ver.4.01 
+      /*ln_process_count_erv      NUMBER := 0;
+      ln_process_count_line_erv   NUMBER := 0;
+      ln_line_count_erv           NUMBER := 0;
+      ln_line_count_temp_erv      NUMBER := 0;
+      */
+   -- modification end Lib_ver.4.01 
+      
+      
+      /*Start of Code Added as per version 1.36*/
+      ln_process_count_prs          NUMBER := 0;
+      ln_line_count_temp_prs        NUMBER := 0;
+      ln_process_count_line_prs     NUMBER := 0;
+      ln_line_count_prs             NUMBER := 0;
+      ln_count_prs                  NUMBER := 0;
+      
+      ln_process_count_payroll      NUMBER := 0;
+      ln_line_count_temp_payroll    NUMBER := 0;
+      ln_process_count_line_payroll NUMBER := 0;
+      ln_line_count_payroll         NUMBER := 0;
+      ln_count_payroll              NUMBER := 0;
+      /*End of Code Added as per version 1.36*/
+      
+      
+--TIP Inventory Accounting --
+      CURSOR get_gl_intreface_data
+      IS
+           SELECT set_of_books_id Book,
+                  user_je_source_name Source,
+                  user_je_category_name Category,
+                  currency_code Currency,
+                  trunc (date_created) Created,
+                  actual_flag Journal,
+                  period_name,
+                  trunc (accounting_date) accounted, --Added as per version 1.20
+                  count(*)
+           FROM   gl_interface          gi,
+                  fnd_lookup_values     flv 
+           WHERE gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+           AND   gi.status = 'NEW'
+           AND   (UPPER (gi.user_je_source_name) NOT IN ('RECEIVABLES',
+                                                      'PAYABLES',
+                                                      'T090593_L10_0006',     --'PRS-LIQ',       -- change  to GAIA Code 
+                                                      'PAYROLL'))            --Added as per version 1.36 to filter out TIP IA and CIP IA  
+           -- modification start Lib_ver.4.01 
+           AND   (UPPER (gi.user_je_category_name) not in ('TIP ERV Per BU'))     -- to exclude tov comparison category        
+           -- modification end Lib_ver.4.01 
+           AND   gi.je_header_id IS NULL
+           AND   gi.je_line_num IS NULL
+           AND   flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+           AND   upper(gi.user_je_source_name) = flv.lookup_code  
+           AND   TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                                             ) 
+                                                     AND NVL (TRUNC (flv.end_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                            )                              
+           AND   upper(user_je_source_name) = upper(iv_source_name)
+        -- modification start Lib_ver.4.01 
+           AND   upper(period_name) = upper(iv_period_name)
+        -- modification start Lib_ver.4.01 
+           GROUP BY set_of_books_id,
+                    user_je_source_name,
+                    user_je_category_name,
+                    currency_code,
+                    trunc (date_created), 
+                    trunc (accounting_date),
+                    actual_flag,
+                    period_name
+           ORDER BY Book,Created;
+
+      
+      CURSOR gl_intreface_data_detail (pn_sob_id            NUMBER,
+                                       pv_source            VARCHAR2,
+                                       pv_category          VARCHAR2,
+                                       pv_currency          VARCHAR2,
+                                       pv_created           DATE,
+                                       pv_journal           VARCHAR2,
+                                       pv_period_name       VARCHAR2,
+                                       pv_accounted         DATE --Added as per version 1.20
+                                       )
+         IS     
+           SELECT rowid,gi.*
+           FROM   gl_interface gi
+           WHERE  gi.set_of_books_id = pn_sob_id--get_gl_intreface_data_rec.Book
+           AND    gi.status = 'NEW'
+           AND    gi.je_header_id IS NULL --Added as per version 1.31
+           AND    gi.je_line_num IS NULL  --Added as per version 1.31
+           AND    user_je_source_name = pv_source--get_gl_intreface_data_rec.Source
+           AND    user_je_category_name = pv_category--get_gl_intreface_data_rec.Category
+           AND    currency_code = pv_currency--get_gl_intreface_data_rec.Currency
+           AND    trunc (date_created) = pv_created--get_gl_intreface_data_rec.Created
+           AND    actual_flag = pv_journal--get_gl_intreface_data_rec.Journal
+           AND    period_name = pv_period_name --get_gl_intreface_data_rec.period_name;  
+           AND    trunc(accounting_date) = pv_accounted; --Added as per version 1.20
+      
+      
+      
+--Grouping of PRS Journals 
+      CURSOR get_gl_intreface_prs
+      IS 
+           SELECT set_of_books_id Book,
+                  user_je_source_name Source,
+                  user_je_category_name Category,
+                  currency_code Currency,
+                  trunc (date_created) Created,
+                  actual_flag Journal,
+                  period_name,
+                  trunc (accounting_date) accounted, --Added as per version 1.20
+                  reference4,
+                  count(*)
+           FROM   gl_interface gi,
+                  fnd_lookup_values flv 
+           WHERE  gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+           AND    gi.status = 'NEW'
+           AND    UPPER (user_je_source_name) ='T090593_L10_0006'  -- PRS-LIQ  
+           AND    gi.je_header_id IS NULL
+           AND    gi.je_line_num IS NULL
+           AND    flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+           AND    upper(gi.user_je_source_name) = flv.lookup_code  
+           AND    TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                                             ) 
+                                                     AND NVL (TRUNC (flv.end_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                            )                             
+           AND    upper(user_je_source_name) = upper(iv_source_name)
+        -- modification start Lib_ver.4.01 
+           and upper(period_name) = upper(iv_period_name)
+        -- modification end Lib_ver.4.01 
+           GROUP BY set_of_books_id,
+                    user_je_source_name,
+                    user_je_category_name,
+                    currency_code,
+                    trunc (date_created), 
+                    trunc (accounting_date),
+                    actual_flag,
+                    period_name,
+                    reference4
+           ORDER BY Book,Created;
+      
+      CURSOR gl_intreface_detail_prs (pn_sob_id        NUMBER,
+                                      pv_source        VARCHAR2,
+                                      pv_category      VARCHAR2,
+                                      pv_currency      VARCHAR2,
+                                      pv_created       DATE,
+                                      pv_journal       VARCHAR2,
+                                      pv_period_name   VARCHAR2,
+                                      pv_accounted     DATE,
+                                      pv_reference4    VARCHAR2
+                                      )
+         IS     
+            SELECT rowid,gi.*
+            FROM   gl_interface gi
+            WHERE  gi.set_of_books_id = pn_sob_id--get_gl_intreface_data_rec.Book
+            AND    gi.status = 'NEW'
+            AND    gi.je_header_id IS NULL 
+            AND    gi.je_line_num IS NULL  
+            AND    user_je_source_name = pv_source
+            AND    user_je_category_name = pv_category
+            AND    currency_code = pv_currency
+            AND    trunc (date_created) = pv_created
+            AND    actual_flag = pv_journal
+            AND    period_name = pv_period_name 
+            AND    reference4 = pv_reference4
+            AND    trunc(accounting_date) = pv_accounted;
+           
+         
+ --Grouping of Payroll Journals 
+      CURSOR get_gl_intreface_payroll
+      IS 
+           SELECT set_of_books_id Book,
+                  user_je_source_name Source,
+                  user_je_category_name Category,
+                  currency_code Currency,
+                  trunc (date_created) Created,
+                  actual_flag Journal,
+                  period_name,
+                  trunc (accounting_date) accounted, --Added as per version 1.20
+                  reference1,
+                  count(*)
+           FROM gl_interface        gi,
+                fnd_lookup_values   flv
+           WHERE gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+           AND   gi.status = 'NEW'
+           AND   UPPER (user_je_source_name) ='PAYROLL'
+           AND   gi.je_header_id IS NULL
+           AND   gi.je_line_num IS NULL
+           AND   flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+           AND   upper(gi.user_je_source_name) = flv.lookup_code  
+           AND   TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                            TRUNC (SYSDATE) 
+                                                          ) 
+                                                  AND NVL (TRUNC (flv.end_date_active), 
+                                                           TRUNC (SYSDATE) 
+                                         )                             
+           AND   upper(user_je_source_name) = upper(iv_source_name) --Added as per version 1.29
+        -- modification start Lib_ver.4.01 
+           and upper(period_name) = upper(iv_period_name)
+        -- modification end Lib_ver.4.01 
+           GROUP BY set_of_books_id,
+                    user_je_source_name,
+                    user_je_category_name,
+                    currency_code,
+                    trunc (date_created), 
+                    trunc (accounting_date), --Added as per version 1.20
+                    actual_flag,
+                    period_name,
+                    reference1
+           ORDER BY Book,Created;
+      
+      CURSOR gl_intreface_detail_payroll (pn_sob_id         NUMBER,
+                                          pv_source         VARCHAR2,
+                                          pv_category       VARCHAR2,
+                                          pv_currency       VARCHAR2,
+                                          pv_created        DATE,
+                                          pv_journal        VARCHAR2,
+                                          pv_period_name    VARCHAR2,
+                                          pv_accounted      DATE ,
+                                          pv_reference1     VARCHAR2
+                                         )
+         IS     
+           SELECT rowid,gi.*
+           FROM   gl_interface gi
+           WHERE  gi.set_of_books_id = pn_sob_id
+           AND    gi.status = 'NEW'
+           AND    gi.je_header_id IS NULL 
+           AND    gi.je_line_num IS NULL  
+           AND    user_je_source_name = pv_source
+           AND    user_je_category_name = pv_category
+           AND    currency_code = pv_currency
+           AND    trunc (date_created) = pv_created
+           AND    actual_flag = pv_journal
+           AND    period_name = pv_period_name 
+           AND    reference1 = pv_reference1
+           AND    trunc(accounting_date) = pv_accounted;           
+      /*End of Code Added as per version 1.36*/
+      
+
+   BEGIN
+   
+      BEGIN
+         lv_block := '0';
+-- ===============================================
+
+         -- Initialize process
+
+         -- ===============================================
+         lv_retcode := xx00ifcmn_const_sv.cv_success;               -- normal 
+         ov_retcode := xx00ifcmn_const_sv.cv_success; 
+         -- normal
+         lv_errbuf := NULL;
+         --
+         lv_block := '1-0';
+         --
+
+         --Extracting the Legal Entity Id 
+
+         --
+         xx00ifcmn_conc_init_proc_sv.get_sess_info
+                                      (ov_errbuf          => lv_errbuf,
+                                       ov_retcode         => lv_retcode,
+                                       ort_sess_info      => lt_sess_info_str_type
+                                      );
+
+         IF (lv_retcode = xx00ifcmn_const_sv.cv_error)
+         THEN
+            RAISE user_session_info_expt;
+         END IF;
+
+         lt_msg_line_atype := xx00ifcmn_conc_outp_sv.message_line_atype (NULL);
+         lt_msg_footer_atype :=
+                            xx00ifcmn_conc_outp_sv.message_footer_atype (NULL);
+      
+      /*Start of Code Added as per version 1.24*/
+         --lv_block := '1-0-1';
+       /*  BEGIN
+            UPDATE gl_interface gi
+               SET user_je_category_name = reference1||' '||user_je_category_name
+             WHERE gi.status = 'NEW'
+               AND gi.je_header_id IS NULL
+               AND gi.je_line_num IS NULL
+               AND gi.user_je_source_name = 'Purchasing'
+               AND gi.user_je_category_name = 'Receiving'
+               AND UPPER(gi.user_je_source_name) = upper(iv_source_name);
+         END; */ 
+         
+      /*Ens of Code Added as per version 1.24*/
+      
+      /*Start of Code Added as per version 1.34*/
+         --lv_block := '1-0-1';
+       /*  BEGIN
+            UPDATE gl_interface gi
+               SET user_je_source_name = 'CIP ERV'
+             WHERE gi.status = 'NEW'
+               AND gi.je_header_id IS NULL
+               AND gi.je_line_num IS NULL
+               AND gi.user_je_source_name = 'Payables'
+               AND gi.user_je_category_name = 'Purchase Invoices'
+               AND reference20 = 'CIP'
+               AND reference30 = 'ERV'
+               AND gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID');
+         END;
+         
+         COMMIT; */
+      /*Start of Code Added as per version 1.34*/
+      
+      /*Start of Code Added as per version 1.36*/
+      --Update Journal Category for Inventory Accouting
+      
+         BEGIN
+             UPDATE gl_interface gi
+             SET    user_je_category_name = substr(reference4,instr(reference4,'-',1,2)+1,instr(reference4,'-',1,3)-instr(reference4,'-',1,2)-1)||' '||user_je_category_name            
+             WHERE  gi.status = 'NEW'
+             AND    gi.je_header_id IS NULL
+             AND    gi.je_line_num IS NULL
+             AND    UPPER(gi.user_je_source_name) in ('T090593_L10_0008')
+             --AND    upper(gi.user_je_source_name) in ('T090593_C20_0001',  --'CIP INVENTORY ACCOUNTING',  check if cip invty acctg is needed in PRAS 
+             --                                         'T090593_L10_0008',  --'TIP INVENTORY ACCOUNTING'
+             --                                        )
+             -- modification start Lib_ver.4.01  
+             AND    UPPER(gi.user_je_category_name) not in ('TIP ERV Per BU') -- to exclude tov comparison category 
+             -- modification end Lib_ver.4.01           
+             AND    UPPER(gi.user_je_source_name) = UPPER(iv_source_name)
+             and    UPPER(gi.period_name) = UPPER(iv_period_name);
+         END;
+         COMMIT;       
+      /*End of Code Added as per version 1.36*/
+      
+  
+    /*Start of Code Added as per version 1.24*/
+    BEGIN
+      lv_block := '1-0-2';
+      SELECT count(1)
+      INTO ln_count_one
+      FROM (SELECT set_of_books_id Book,
+                   user_je_source_name Source,
+                   user_je_category_name Category,
+                   currency_code Currency,
+                   trunc (date_created) Created,
+                   actual_flag Journal,
+                   period_name,
+                   trunc (accounting_date) accounted, --Added as per version 1.20
+                   count(*)
+            FROM   gl_interface gi,
+                   fnd_lookup_values flv --Added as per version 1.34
+            WHERE  gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+            AND    gi.status = 'NEW'
+            --  AND UPPER (user_je_source_name) NOT IN   --Commented as per version 1.16
+            --                                      ('RECEIVABLES', 'PAYABLES') --Commented as per version 1.16
+            /*Start of Code Added as per version 1.16*/
+              AND (UPPER (user_je_source_name) NOT IN ('RECEIVABLES',    
+                                                       'PAYABLES',
+                                                       'T090593_L10_0006',     --'PRS-LIQ',
+                                                       'PAYROLL'))   --Added as per version 1.36 to filter out TIP IA and CIP IA
+              AND gi.je_header_id IS NULL
+              AND gi.je_line_num IS NULL
+              AND upper(user_je_source_name) = upper(iv_source_name) --Added as per version 1.29
+           -- modification start Lib_ver.4.01 
+              and upper(period_name) = upper(iv_period_name)
+           -- modification start Lib_ver.4.01 
+              AND flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+               AND upper(gi.user_je_source_name) = flv.lookup_code  
+               AND TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                                             ) 
+                                                     AND NVL (TRUNC (flv.end_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                            )                
+     GROUP BY set_of_books_id,
+              user_je_source_name,
+              user_je_category_name,
+              currency_code,
+              trunc (date_created), 
+              trunc (accounting_date), --Added as per version 1.20
+              actual_flag,
+              period_name);
+    
+      END;
+    
+--ERV  
+    /*BEGIN 
+      lv_block := '1-0-3';
+      SELECT count(1)
+        INTO ln_count_two
+        FROM (SELECT set_of_books_id Book,
+              user_je_source_name Source,
+              user_je_category_name Category,
+              currency_code Currency,
+              trunc (date_created) Created,
+              actual_flag Journal,
+              period_name,
+              trunc (accounting_date) accounted, --Added as per version 1.20
+              count(*)
+         FROM gl_interface gi
+             ,fnd_lookup_values flv --Added as per version 1.16
+        WHERE gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+              AND gi.status = 'NEW'
+              AND (flv.lookup_type = 'XX00IFGL_CIP_ERV'
+                      AND upper(gi.user_je_category_name) = flv.lookup_code
+                      AND gi.user_je_source_name = flv.meaning
+                      AND gi.reference20 = flv.tag
+                      AND gi.reference30 = flv.description
+                      AND TRUNC(NVL(flv.start_date_Active,SYSDATE)) <= TRUNC(SYSDATE)
+                      AND TRUNC(NVL(flv.end_date_Active,SYSDATE)) >= TRUNC(SYSDATE)
+                   )         
+              AND gi.je_header_id IS NULL
+              AND gi.je_line_num IS NULL
+              AND upper(user_je_source_name) = upper(iv_source_name) --Added as per version 1.29
+     GROUP BY set_of_books_id,
+              user_je_source_name,
+              user_je_category_name,
+              currency_code,
+              trunc (date_created), 
+              trunc (accounting_date), --Added as per version 1.20
+              actual_flag,
+              period_name); 
+    
+      END;      */
+      --ln_record_count := ln_count_one + ln_count_two; --Commented as per version 1.36
+    /*End of Code Added as per version 1.24*/
+    
+/*Start of Code Added as per versio 1.36*/
+--PRS 
+    BEGIN
+       SELECT count(1)
+       INTO   ln_count_prs
+       FROM  (SELECT set_of_books_id Book,
+                     user_je_source_name Source,
+                     user_je_category_name Category,
+                     currency_code Currency,
+                     trunc (date_created) Created,
+                     actual_flag Journal,
+                     period_name,
+                     trunc (accounting_date) accounted, --Added as per version 1.20
+                     reference4,
+                     count(*)
+              FROM   gl_interface       gi,
+                     fnd_lookup_values  flv --Added as per version 1.16 --Commented as per version 1.24 --UnCommented as per version 1.34
+              WHERE  gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+              AND    gi.status = 'NEW'
+              AND    UPPER (user_je_source_name) = 'T090593_L10_0006' --'PRS-LIQ'
+              AND    gi.je_header_id IS NULL
+              AND    gi.je_line_num IS NULL
+              AND    flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+              AND    upper(gi.user_je_source_name) = flv.lookup_code  
+              AND    TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                                             ) 
+                                                     AND NVL (TRUNC (flv.end_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                            )                             
+              AND upper(user_je_source_name) = upper(iv_source_name) --Added as per version 1.29
+           -- modification start Lib_ver.4.01 
+              and upper(period_name) = upper(iv_period_name)
+           -- modification start Lib_ver.4.01 
+     GROUP BY set_of_books_id,
+              user_je_source_name,
+              user_je_category_name,
+              currency_code,
+              trunc (date_created), 
+              trunc (accounting_date), --Added as per version 1.20
+              actual_flag,
+              period_name,
+              reference4);
+    END;
+
+    BEGIN
+       SELECT count(1)
+         INTO ln_count_payroll
+         FROM (SELECT set_of_books_id Book,
+                      user_je_source_name Source,
+                      user_je_category_name Category,
+                      currency_code Currency,
+                      trunc (date_created) Created,
+                      actual_flag Journal,
+                      period_name,
+                      trunc (accounting_date) accounted, --Added as per version 1.20
+                      reference1,
+                      count(*)
+               FROM   gl_interface        gi,
+                      fnd_lookup_values   flv --Added as per version 1.16 --Commented as per version 1.24 --UnCommented as per version 1.34
+               WHERE  gi.set_of_books_id = fnd_profile.VALUE ('GL_SET_OF_BKS_ID')
+               AND    gi.status = 'NEW'
+               AND    UPPER (user_je_source_name) ='PAYROLL'
+               AND    gi.je_header_id IS NULL
+               AND    gi.je_line_num IS NULL
+               AND    flv.lookup_type = 'XX00IFGL_SOURCE_NAME'
+               AND    upper(gi.user_je_source_name) = flv.lookup_code  
+               AND    TRUNC (SYSDATE) BETWEEN NVL (TRUNC (flv.start_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                                             ) 
+                                                     AND NVL (TRUNC (flv.end_date_active), 
+                                                              TRUNC (SYSDATE) 
+                                            )                             
+               AND    upper(user_je_source_name) = upper(iv_source_name) --Added as per version 1.29
+            -- modification start Lib_ver.4.01 
+               and upper(period_name) = upper(iv_period_name)
+            -- modification start Lib_ver.4.01 
+               GROUP BY set_of_books_id,
+                        user_je_source_name,
+                        user_je_category_name,
+                        currency_code,
+                        trunc (date_created), 
+                        trunc (accounting_date),
+                        actual_flag,
+                        period_name,
+                        reference1);
+    END;
+    ln_record_count := ln_count_one + ln_count_two + ln_count_prs + ln_count_payroll;
+    /*End of Code Added as per versio 1.36*/
+    
+         lv_block := '1-1';
+
+         --Open Cursor to Update header-id and line id of GL Interface Reocrds
+         FOR get_gl_intreface_data_rec IN get_gl_intreface_data
+         LOOP
+            ln_process_count := ln_process_count + 1;
+            lv_block := '1-1-1';
+            BEGIN
+               SELECT COUNT(1)
+               INTO   ln_line_count_temp
+               FROM   gl_interface gi
+               WHERE gi.set_of_books_id     = get_gl_intreface_data_rec.Book
+               AND   gi.status              = 'NEW'
+               AND   user_je_source_name    = get_gl_intreface_data_rec.Source
+               AND   user_je_category_name  = get_gl_intreface_data_rec.Category
+               AND   currency_code          = get_gl_intreface_data_rec.Currency
+               AND   trunc (date_created)   = get_gl_intreface_data_rec.Created
+               AND   actual_flag            = get_gl_intreface_data_rec.Journal
+               AND   period_name            = get_gl_intreface_data_rec.period_name
+               AND   gi.je_header_id is null
+               AND   gi.je_line_num is null 
+               AND   trunc(accounting_date) = get_gl_intreface_data_rec.accounted; --Added as per version 1.20
+            END;
+            ln_process_count_line := ln_process_count_line + ln_line_count_temp;
+            lv_block := '1-2';
+            lv_error_message :=
+                  'Error Occured when processing record for SOB '
+               || get_gl_intreface_data_rec.Book
+               || cv_space
+               || 'Journal Source'
+               || cv_space
+               || get_gl_intreface_data_rec.Source
+               || cv_space
+               || 'Category'
+               || get_gl_intreface_data_rec.Category
+               || cv_space
+               || get_gl_intreface_data_rec.currency
+               || cv_space
+               || ' Created on'
+               || cv_space
+               || get_gl_intreface_data_rec.Created
+               || cv_space
+               || 'For Period'
+               || get_gl_intreface_data_rec.period_name
+               || cv_space     --Added as per version 1.20
+               || 'Accounted On'      --Added as per version 1.20
+               || get_gl_intreface_data_rec.accounted  --Added as per version 1.20
+               || cv_period;
+            --Fetch header Id in a local variable 
+            lv_block := '1-3';
+            
+            BEGIN
+               SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+               INTO   ln_je_header_id
+               FROM   DUAL;
+            END;
+           
+            
+            lv_block := '1-4';
+            FOR gl_intreface_data_detail_rec in gl_intreface_data_detail( get_gl_intreface_data_rec.Book,
+                                                                          get_gl_intreface_data_rec.Source,
+                                                                          get_gl_intreface_data_rec.Category,
+                                                                          get_gl_intreface_data_rec.Currency,
+                                                                          get_gl_intreface_data_rec.Created,
+                                                                          get_gl_intreface_data_rec.Journal,
+                                                                          get_gl_intreface_data_rec.period_name,
+                                                                          get_gl_intreface_data_rec.accounted
+                                                                         )
+            LOOP
+               ln_line_count := ln_line_count + 1;
+               lv_block := '2';
+               lv_error_message :=
+                            'Error Occured when processing record with Row Id'
+                          || gl_intreface_data_detail_rec.rowid
+                          || 'Code Combination Id'
+                              || gl_intreface_data_detail_rec.code_combination_id;
+               lv_block := '2-1';               
+               --Fetch Line Num in a local variable
+               BEGIN
+                  SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+                  INTO   ln_je_line_num
+                  FROM   DUAL;
+               END;
+               lv_block := '2-2';            
+
+               BEGIN
+                  UPDATE gl_interface
+                  SET    je_header_id = ln_je_header_id,
+                         je_line_num = ln_je_line_num
+                  WHERE  ROWID = gl_intreface_data_detail_rec.ROWID;
+               END;
+            END LOOP;
+         END LOOP;
+
+         lv_block := '1-5';
+      EXCEPTION
+         WHEN OTHERS
+         THEN
+            -- set out parameter 
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+            ROLLBACK;
+      END;
+
+   /*Start of Code Added as per version 1.28*/      
+    /*lv_block := '4';
+    BEGIN
+      lv_block := '4-1';
+
+         --Open Cursor to Update header-id and line id of GL Interface Reocrds
+         FOR get_gl_interface_cip_erv_rec IN get_gl_interface_cip_erv
+         LOOP
+            ln_process_count_erv := ln_process_count_erv + 1;
+            lv_block := '1-1-1';
+            BEGIN
+               SELECT COUNT(1)
+               INTO   ln_line_count_temp_erv
+               FROM   gl_interface gi
+               WHERE  gi.set_of_books_id = get_gl_interface_cip_erv_rec.Book
+               AND    gi.status = 'NEW'
+               AND    user_je_source_name = get_gl_interface_cip_erv_rec.Source
+               AND    user_je_category_name = get_gl_interface_cip_erv_rec.Category
+               AND    currency_code = get_gl_interface_cip_erv_rec.Currency
+               AND    trunc (date_created) = get_gl_interface_cip_erv_rec.Created
+               AND    actual_flag = get_gl_interface_cip_erv_rec.Journal
+               AND    period_name = get_gl_interface_cip_erv_rec.period_name
+               AND    trunc(accounting_date) = get_gl_interface_cip_erv_rec.accounted
+               AND    reference20 = get_gl_interface_cip_erv_rec.reference20 
+               AND    gi.je_header_id is null --Added as per version 1.31
+               AND    gi.je_line_num is NULL --Added as per version 1.31
+               AND    reference30 = get_gl_interface_cip_erv_rec.reference30; 
+            END;
+            ln_process_count_line_erv := ln_process_count_line_erv + ln_line_count_temp_erv;
+            lv_block := '4-2';
+            lv_error_message :=
+                  'Error Occured when processing record for SOB '
+               || get_gl_interface_cip_erv_rec.Book
+               || cv_space
+               || 'Journal Source'
+               || cv_space
+               || get_gl_interface_cip_erv_rec.Source
+               || cv_space
+               || 'Category'
+               || get_gl_interface_cip_erv_rec.Category
+               || cv_space
+               || get_gl_interface_cip_erv_rec.currency
+               || cv_space
+               || ' Created on'
+               || cv_space
+               || get_gl_interface_cip_erv_rec.Created
+               || cv_space
+               || 'For Period'
+               || get_gl_interface_cip_erv_rec.period_name
+               || cv_space     --Added as per version 1.20
+           || 'Accounted On'      --Added as per version 1.20
+               || get_gl_interface_cip_erv_rec.accounted  --Added as per version 1.20
+               || cv_period;
+            --Fetch header Id in a local variable
+            lv_block := '1-3';
+            
+            BEGIN
+               SELECT xx00ifgl_je_header_id.NEXTVAL
+                 INTO ln_je_header_id
+                 FROM DUAL;
+            END;
+           
+            
+            lv_block := '1-4';
+            FOR cip_erv_detail_rec in gl_intreface_cip_erv_detail( get_gl_interface_cip_erv_rec.Book,
+                                                                          get_gl_interface_cip_erv_rec.Source,
+                                                                          get_gl_interface_cip_erv_rec.Category,
+                                                                          get_gl_interface_cip_erv_rec.Currency,
+                                                                          get_gl_interface_cip_erv_rec.Created,
+                                                                          get_gl_interface_cip_erv_rec.Journal,
+                                                                          get_gl_interface_cip_erv_rec.period_name,
+                                                                          get_gl_interface_cip_erv_rec.accounted,
+                                                                          get_gl_interface_cip_erv_rec.reference20,
+                                                                          get_gl_interface_cip_erv_rec.reference30
+                                                                         )
+            LOOP
+               ln_line_count_erv := ln_line_count_erv + 1;
+               lv_block := '2';
+               lv_error_message :=
+                            'Error Occured when processing record with Row Id'
+                          || cip_erv_detail_rec.rowid
+                          || 'Code Combination Id'
+                              || cip_erv_detail_rec.code_combination_id;
+               lv_block := '2-1';               
+               --Fetch Line Num in a local variable
+               BEGIN
+                  SELECT xx00ifgl_je_header_id.NEXTVAL
+                    INTO ln_je_line_num
+                    FROM DUAL;
+               END;
+               lv_block := '2-2';            
+
+               BEGIN
+                  UPDATE gl_interface
+                     SET je_header_id = ln_je_header_id,
+                         je_line_num = ln_je_line_num
+                   WHERE ROWID = cip_erv_detail_rec.ROWID;
+               END;
+            END LOOP;
+         END LOOP;
+
+         lv_block := '1-5';
+      EXCEPTION
+         WHEN OTHERS
+         THEN
+            -- set out parameter
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+            ROLLBACK;
+      END;
+      */
+     -- ln_process_count := ln_process_count + ln_process_count_erv; -- Commented as per version 1.36
+     -- ln_process_count_line := ln_process_count_line + ln_process_count_line_erv;  -- Commented as per version 1.36
+     -- ln_line_count := ln_line_count + ln_line_count_erv;  -- Commented as per version 1.36
+   /*End of Code Added as per version 1.28*/
+   
+
+   /*Start of Code Added as per version 1.36*/
+ --Grouping of PRS 
+     lv_block := '5';
+     BEGIN
+       lv_block := '5-1';
+ 
+          --Open Cursor to Update header-id and line id of GL Interface Reocrds
+          FOR get_gl_intreface_prs_rec IN get_gl_intreface_prs
+          LOOP
+             ln_process_count_prs := ln_process_count_prs + 1;
+             lv_block := '5-2';
+             BEGIN
+                SELECT COUNT(1)
+                INTO   ln_line_count_temp_prs
+                FROM   gl_interface gi
+                WHERE  gi.set_of_books_id       = get_gl_intreface_prs_rec.Book
+                AND    gi.status                = 'NEW'
+                AND    user_je_source_name      = get_gl_intreface_prs_rec.Source
+                AND    user_je_category_name    = get_gl_intreface_prs_rec.Category
+                AND    currency_code            = get_gl_intreface_prs_rec.Currency
+                AND    trunc (date_created)     = get_gl_intreface_prs_rec.Created
+                AND    actual_flag              = get_gl_intreface_prs_rec.Journal
+                AND    period_name              = get_gl_intreface_prs_rec.period_name
+                AND    trunc(accounting_date)   = get_gl_intreface_prs_rec.accounted
+                AND    reference4               = get_gl_intreface_prs_rec.reference4 
+                AND    gi.je_header_id is null 
+                AND    gi.je_line_num is NULL ; 
+             END;
+             ln_process_count_line_prs := ln_process_count_line_prs + ln_line_count_temp_prs;
+             lv_block := '5-3';
+             lv_error_message :=
+                   'Error Occured when processing record for SOB '
+                || get_gl_intreface_prs_rec.Book
+                || cv_space
+                || 'Journal Source'
+                || cv_space
+                || get_gl_intreface_prs_rec.Source
+                || cv_space
+                || 'Category'
+                || get_gl_intreface_prs_rec.Category
+                || cv_space
+                || get_gl_intreface_prs_rec.currency
+                || cv_space
+                || ' Created on'
+                || cv_space
+                || get_gl_intreface_prs_rec.Created
+                || cv_space
+                || 'For Period'
+                || get_gl_intreface_prs_rec.period_name
+                || cv_space     --Added as per version 1.20
+                || 'Accounted On'      --Added as per version 1.20
+                || get_gl_intreface_prs_rec.accounted  --Added as per version 1.20
+                || cv_period;
+             --Fetch header Id in a local variable
+             lv_block := '5-4';
+             
+             BEGIN
+                SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+                  INTO ln_je_header_id
+                  FROM DUAL;
+             END;
+            
+             
+             lv_block := '5-5';
+             FOR gl_intreface_detail_prs_rec in gl_intreface_detail_prs (get_gl_intreface_prs_rec.Book,
+                                                                         get_gl_intreface_prs_rec.Source,
+                                                                         get_gl_intreface_prs_rec.Category,
+                                                                         get_gl_intreface_prs_rec.Currency,
+                                                                         get_gl_intreface_prs_rec.Created,
+                                                                         get_gl_intreface_prs_rec.Journal,
+                                                                         get_gl_intreface_prs_rec.period_name,
+                                                                         get_gl_intreface_prs_rec.accounted,
+                                                                         get_gl_intreface_prs_rec.reference4
+                                                                        )
+             LOOP
+                ln_line_count_prs := ln_line_count_prs + 1;
+                lv_block := '5-6';
+                lv_error_message :=
+                             'Error Occured when processing record with Row Id'
+                           || gl_intreface_detail_prs_rec.rowid
+                           || 'Code Combination Id'
+                           || gl_intreface_detail_prs_rec.code_combination_id;
+                lv_block := '5-7';               
+                --Fetch Line Num in a local variable
+                BEGIN
+                   SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+                   INTO   ln_je_line_num
+                   FROM   DUAL;
+                END;
+                lv_block := '5-8';            
+ 
+                BEGIN
+                   UPDATE gl_interface
+                   SET    je_header_id = ln_je_header_id,
+                          je_line_num = ln_je_line_num
+                   WHERE  ROWID = gl_intreface_detail_prs_rec.ROWID;
+                END;
+             END LOOP;
+          END LOOP;
+ 
+          lv_block := '5-9';
+       EXCEPTION
+          WHEN OTHERS
+          THEN
+             -- set out parameter
+             ov_errbuf :=
+                SUBSTRB (   cv_proc_name
+                         || cv_period
+                         || lv_block
+                         || cv_delimiter_msg
+                         || SQLERRM,
+                         1,
+                         5000
+                        );
+             ov_retcode := xx00ifcmn_const_sv.cv_error;
+             xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+             ROLLBACK;
+      END;
+
+
+
+--Grouping of Payroll      
+
+    lv_block := '6';
+    BEGIN
+      lv_block := '6-2';
+
+         --Open Cursor to Update header-id and line id of GL Interface Reocrds
+         FOR get_gl_intreface_payroll_rec IN get_gl_intreface_payroll
+         LOOP
+            ln_process_count_payroll := ln_process_count_payroll + 1;
+            lv_block := '6-3';
+            BEGIN
+              SELECT COUNT(1)
+              INTO   ln_line_count_temp_payroll
+              FROM   gl_interface gi
+              WHERE  gi.set_of_books_id     = get_gl_intreface_payroll_rec.Book
+              AND    gi.status              = 'NEW'
+              AND    user_je_source_name    = get_gl_intreface_payroll_rec.Source
+              AND    user_je_category_name  = get_gl_intreface_payroll_rec.Category
+              AND    currency_code          = get_gl_intreface_payroll_rec.Currency
+              AND    trunc (date_created)   = get_gl_intreface_payroll_rec.Created
+              AND    actual_flag            = get_gl_intreface_payroll_rec.Journal
+              AND    period_name            = get_gl_intreface_payroll_rec.period_name
+              AND    trunc(accounting_date) = get_gl_intreface_payroll_rec.accounted
+              AND    reference1             = get_gl_intreface_payroll_rec.reference1 
+              AND    gi.je_header_id is null 
+              AND    gi.je_line_num is NULL ; 
+            END;
+            ln_process_count_line_payroll := ln_process_count_line_payroll + ln_line_count_temp_payroll;
+            lv_block := '4-2';
+            lv_error_message :=
+                  'Error Occured when processing record for SOB '
+               || get_gl_intreface_payroll_rec.Book
+               || cv_space
+               || 'Journal Source'
+               || cv_space
+               || get_gl_intreface_payroll_rec.Source
+               || cv_space
+               || 'Category'
+               || get_gl_intreface_payroll_rec.Category
+               || cv_space
+               || get_gl_intreface_payroll_rec.currency
+               || cv_space
+               || ' Created on'
+               || cv_space
+               || get_gl_intreface_payroll_rec.Created
+               || cv_space
+               || 'For Period'
+               || get_gl_intreface_payroll_rec.period_name
+               || cv_space     --Added as per version 1.20
+               || 'Accounted On'      --Added as per version 1.20
+               || get_gl_intreface_payroll_rec.accounted  --Added as per version 1.20
+               || cv_period;
+            --Fetch header Id in a local variable
+            lv_block := '1-3';
+            
+            BEGIN
+               SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+                 INTO ln_je_header_id
+                 FROM DUAL;
+            END;
+           
+            
+            lv_block := '1-4';
+            FOR gl_detail_payroll_rec in gl_intreface_detail_payroll( get_gl_intreface_payroll_rec.Book,
+                                                                          get_gl_intreface_payroll_rec.Source,
+                                                                          get_gl_intreface_payroll_rec.Category,
+                                                                          get_gl_intreface_payroll_rec.Currency,
+                                                                          get_gl_intreface_payroll_rec.Created,
+                                                                          get_gl_intreface_payroll_rec.Journal,
+                                                                          get_gl_intreface_payroll_rec.period_name,
+                                                                          get_gl_intreface_payroll_rec.accounted,
+                                                                          get_gl_intreface_payroll_rec.reference1
+                                                                         )
+            LOOP
+               ln_line_count_payroll := ln_line_count_payroll + 1;
+               lv_block := '2';
+               lv_error_message :=
+                            'Error Occured when processing record with Row Id'
+                          || gl_detail_payroll_rec.rowid
+                          || 'Code Combination Id'
+                          || gl_detail_payroll_rec.code_combination_id;
+               lv_block := '2-1';               
+               --Fetch Line Num in a local variable
+               BEGIN
+                  SELECT xx00ifgl_je_header_num_seq.NEXTVAL
+                    INTO ln_je_line_num
+                    FROM DUAL;
+               END;
+               lv_block := '2-2';            
+
+               BEGIN
+                  UPDATE gl_interface
+                  SET    je_header_id = ln_je_header_id,
+                         je_line_num = ln_je_line_num
+                  WHERE  ROWID = gl_detail_payroll_rec.ROWID;
+               END;
+            END LOOP;
+         END LOOP;
+
+         lv_block := '1-5';
+      EXCEPTION
+         WHEN OTHERS
+         THEN
+            -- set out parameter
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+            ROLLBACK;
+      END;   
+   
+   --ln_process_count := ln_process_count + ln_process_count_erv + ln_process_count_prs + ln_process_count_payroll; -- Commented as per version 1.36
+   ln_process_count := ln_process_count +ln_process_count_prs + ln_process_count_payroll; -- Commented as per version 1.36
+   --ln_process_count_line := ln_process_count_line + ln_process_count_line_erv + ln_process_count_line_prs + ln_process_count_line_payroll;  -- Commented as per version 1.36
+   ln_process_count_line := ln_process_count_line + ln_process_count_line_prs + ln_process_count_line_payroll;  -- Commented as per version 1.36
+   --ln_line_count := ln_line_count + ln_line_count_erv + ln_line_count_prs + ln_line_count_payroll;
+   ln_line_count := ln_line_count + ln_line_count_prs + ln_line_count_payroll;
+   /*End of Code Added as per version 1.36*/
+
+      lv_block := '3-0';
+
+      BEGIN
+         SELECT fcp.concurrent_program_name,
+                fcpt.user_concurrent_program_name
+         INTO   lv_program_short_name,
+                lv_program_name
+         FROM   fnd_concurrent_programs_tl fcpt,
+                fnd_concurrent_programs    fcp
+         WHERE  fcp.concurrent_program_id = fcpt.concurrent_program_id
+         AND    fcp.concurrent_program_id = lt_sess_info_str_type.conc_program_id;
+      
+      EXCEPTION
+         WHEN OTHERS
+         THEN
+            lv_program_short_name := NULL;
+            lv_program_name := NULL;
+      END;
+
+      ld_date_input := SYSDATE;
+
+      ln_error_count := ln_record_count - ln_process_count; -- Commented s per version 1.28
+      
+      ln_error_count_line := ln_process_count_line - ln_line_count; 
+      
+      lv_block := '3-1';
+
+      IF ov_retcode = xx00ifcmn_const_sv.cv_success
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal ended';
+      ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal error';
+      ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal warning';
+      END IF;
+
+      xx00ifcmn_conc_outp_sv.cmn_conc_outp
+                                       (lv_errbuf,
+                                        lv_retcode,
+                                        gd_xx02_sysdate,
+                                        lt_sess_info_str_type.org_name,
+                                        lt_sess_info_str_type.conc_request_id,
+                                        lv_program_short_name,
+                                        lv_program_name,
+                                        lt_msg_line_atype,
+                                        'Y',
+                                        ln_record_count,
+                                        ln_process_count_line,
+                                        ln_process_count,
+                                        ln_line_count,
+                                        ln_error_count,
+                                        ln_error_count_line,
+                                        lt_msg_footer_atype,
+                                        ld_date_input
+                                       );
+      lv_block := '3-2';
+
+      IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+      ELSE
+         ov_retcode := xx00ifcmn_const_sv.cv_success;
+         ov_errbuf := lv_program_name || ' Completed Successfully';
+      END IF;
+
+      lv_block := '3-3';
+      COMMIT;
+   EXCEPTION
+      WHEN user_session_info_expt
+      THEN
+         -- set out parameter
+         ov_errbuf := SUBSTRB (lv_errbuf, 1, 4000);
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+      WHEN OTHERS
+      THEN
+         -- set out parameter
+         ov_errbuf :=
+            SUBSTRB (   cv_proc_name
+                     || cv_period
+                     || lv_block
+                     || cv_delimiter_msg
+                     || SQLERRM,
+                     1,
+                     5000
+                    );
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         ROLLBACK;
+   END update_gl_sequences;
+/** End of Code Added as per version 1.14**/
+
+END xx00ifgl_interface_conc_sv_tip;
+/

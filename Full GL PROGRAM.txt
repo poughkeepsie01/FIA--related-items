@@ -1,0 +1,2259 @@
+CREATE OR REPLACE PACKAGE BODY APPS.xx00ifgl_interface_conc_sv
+AS
+/**********************************************************************************************************************************
+*
+*  Package Name :  xx00ifgl_interface_conc_sv
+*  Description  :  GL Interface Package
+*  Extension ID :  XX00IFGL001B1
+*  Version      :  1.03
+*
+*  Program List
+*  ------------------------  ----------    ---------      ----------------------------------------------
+*          Name                 Type           Ret          Description
+*  ------------------------  ----------    ---------      ----------------------------------------------
+*   main_extr                   P                           Extraction of GL Data
+*   main_conv                   P                           Conversion and Error Check procedure is called from this procedure
+*   writelog                    P                           To check log message
+*   populate_gl_stg             P                           Insertion into GL Journal staging Table
+*   populate_gl_if              P                           Insertion of GL Data into interface table by calling populate_gl_line_if
+*   populate_gl_line_if         P                           Insertion of Data into the interface Table
+*
+*  Change Record
+*  -----------------------     ----------     ------------------    ----------------------------------------------
+*           Date                  Ver.            Editor                 Description
+*  -----------------------     ----------     ------------------    ----------------------------------------------
+*         05-APR-2013            1.00             ECT                    Newly created(v1.00 by 11i)
+*         04-JUN-2014            1.01             Nakasaki               Move update_err_chk_error
+*         01-SEP-2014            1.02             Nakasaki               Add parameter
+*         11-SEP-2014            1.03             Nakasaki               Update 1.02
+*
+***********************************************************************************************************************************/
+--
+-- Global Variable Declaration
+
+   cv_package_name    CONSTANT VARCHAR2 (30) := 'xx00ifgl_interface_conc_sv'; -- package name
+
+   cv_delimiter_msg   CONSTANT VARCHAR2 (1)  := '|';     -- message delimiter
+   cv_period          CONSTANT VARCHAR2 (1)  := '.';	  -- message code
+
+   gv_xx01ledg_name            VARCHAR2 (50)
+                               := fnd_profile.VALUE ('XX00IFCMN_LEDGER_NAME');
+   gd_xx02_sysdate             DATE          := SYSDATE;
+
+/********************************************************************************************************
+*  Procedure Name       :   main_extr
+*  Description          :   Insertion of Data into GL Journal Stg Table
+********************************************************************************************************/
+   PROCEDURE main_extr (
+      ov_errbuf    OUT   VARCHAR2,                         --   error message
+      ov_retcode   OUT   VARCHAR2                            --   return code
+   )
+   IS
+      /* 05-APR-2013 modify start */
+      /*
+      CURSOR get_gl_new_data (lv_header_id NUMBER)
+      IS
+         SELECT *
+           FROM xx00ifgl_inv_gl_journal_data
+          WHERE je_header_id = lv_header_id;
+
+      CURSOR get_gl_header_id
+      IS
+         SELECT   je_header_id
+             FROM xx00ifgl_inv_gl_journal_data
+         GROUP BY je_header_id;
+      */
+      CURSOR get_gl_new_data (
+         lv_transaction_id         NUMBER,
+         lv_user_je_category_name  VARCHAR2)
+      IS
+         SELECT *
+           FROM xx00ifgl_inv_gl_journal_data
+          WHERE transaction_id = lv_transaction_id
+            AND user_je_category_name = lv_user_je_category_name;
+
+      CURSOR get_gl_header_id
+      IS
+         SELECT transaction_id,
+                user_je_category_name
+           FROM xx00ifgl_inv_gl_journal_data
+         GROUP BY transaction_id,
+                  user_je_category_name;
+      /* 05-APR-2013 modify end */
+
+--
+--Local Variable Declaration
+--
+
+-- ===============================
+-- local Constant
+-- ===============================
+      cv_proc_name    CONSTANT VARCHAR2 (100)                  := 'main_extr';
+      -- procedure name
+      cv_proc_desc    CONSTANT VARCHAR2 (50)          := 'GL Data Extraction';
+                                                        -- process description
+
+   gv_xx01ledg_name            VARCHAR2 (50)
+                               := fnd_profile.VALUE ('XX00IFCMN_LEDGER_NAME');
+      /* 05-APR-2013 add start */
+      cv_tax_rege_code CONSTANT VARCHAR2(30)
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_REGE_CODE');
+      cv_tax_code      CONSTANT VARCHAR2(30)
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_CODE');
+      cv_tax_stas_code CONSTANT VARCHAR2(30)
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_STAS_CODE');
+      cv_tax_jurn_code CONSTANT VARCHAR2(30)
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_JURN_CODE');
+      cv_tax_rate_code CONSTANT VARCHAR2(30)
+                               := fnd_profile.VALUE ('XX00IFGL_TAX_RATE_CODE');
+      cn_tax_rate      CONSTANT NUMBER
+                               := TO_NUMBER(fnd_profile.VALUE ('XX00IFGL_TAX_RATE'));
+      /* 05-APR-2013 add end */
+--
+-- *** local Constant user define ***
+-- ===============================
+-- local variable
+-- ===============================
+      lv_errbuf                VARCHAR2 (5000);              -- error message
+      lv_retcode               VARCHAR2 (1);                   -- return code
+      lv_errmsg                VARCHAR2 (5000);            -- user error code
+
+      lv_block                 VARCHAR2 (10);         -- process block number
+      --
+      lt_sess_info_str_type    xx00ifcmn_conc_init_proc_sv.sess_info_str_type;
+      --
+      user_session_info_expt   EXCEPTION;
+      -- common API get_sess_info exception
+      lrt_xx00gl_interface     xx00ifgl_journal_stg%ROWTYPE;
+      ln_xx01_legal_ent_id     NUMBER                                 := NULL;
+      l_exe_main_para_expt     EXCEPTION;
+      l_exe_gl_ins_expt        EXCEPTION;
+      lv_gl_err_msg            VARCHAR2 (4000)                        := NULL;
+      lv_gl_err_msg_add        VARCHAR2 (4000)                        := NULL;
+      lv_chk_line_err          VARCHAR2 (1)                            := 'N';
+      ld_date_input            DATE;
+      ln_proc_cnt_hdr          NUMBER                                  := '0';
+      ln_proc_cnt_line         NUMBER                                  := '0';
+      ln_proc_cnt_hdr_line     NUMBER                                  := '0';  /* 05-APR-2013 add */
+      lv_je_header_num         VARCHAR2 (50)                           := NULL; /* 05-APR-2013 add */
+      ln_proc_cnt_line_temp    NUMBER                                  := '0';
+      ln_norm_proc_cnt_hdr     NUMBER                                  := '0';
+      ln_norm_proc_cnt_line    NUMBER                                  := '0';
+      ln_err_proc_cnt_hdr      NUMBER                                  := '0';
+      ln_err_proc_cnt_line     NUMBER                                  := '0';
+      lv_program_short_name    VARCHAR2 (50);
+      lv_program_name          VARCHAR2 (100);
+      lt_msg_line_atype        xx00ifcmn_conc_outp_sv.message_line_atype;
+      lt_msg_footer_atype      xx00ifcmn_conc_outp_sv.message_footer_atype;
+
+   BEGIN
+      BEGIN
+
+         /*-#########  static START   #############*/
+
+	 -- ===============================================
+	 -- Initialize process
+	 -- ===============================================
+         lv_retcode := xx00ifcmn_const_sv.cv_success;               -- normal
+         lt_msg_line_atype :=
+                             xx00ifcmn_conc_outp_sv.message_line_atype (NULL);
+         lt_msg_footer_atype :=
+                           xx00ifcmn_conc_outp_sv.message_footer_atype (NULL);
+         lv_errbuf := NULL;
+
+         lv_block := '1-0';
+
+         xx00ifcmn_conc_init_proc_sv.get_sess_info
+                                      (ov_errbuf          => lv_errbuf,
+                                       ov_retcode         => lv_retcode,
+                                       ort_sess_info      => lt_sess_info_str_type
+                                      );
+
+         IF (lv_retcode = xx00ifcmn_const_sv.cv_error)
+         THEN
+            RAISE user_session_info_expt;
+         END IF;
+
+         lv_block := '1-1';
+
+         --Extracting the Legal Entity Id
+         BEGIN
+
+            --SELECT legal_entity_id        /* 05-APR-2013 modify */
+            SELECT default_legal_context_id /* 05-APR-2013 modify */
+              INTO ln_xx01_legal_ent_id
+              FROM hr_operating_units
+             WHERE organization_id = lt_sess_info_str_type.org_id;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               lv_errbuf :=
+                     'Unable to extract the legal Entity Id for Org Id :'
+                  || lt_sess_info_str_type.org_id
+                  || ':'
+                  || SQLERRM;
+               RAISE l_exe_main_para_expt;
+         END;
+
+         /* 05-APR-2013 add start */
+         lv_block := '1-1-1';
+         IF (cv_tax_rege_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Regime Code for Profile : '
+               || 'XX00IFGL:Tax Regime Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Code for Profile : '
+               || 'XX00IFGL:Tax Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_stas_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Status Code for Profile : '
+               || 'XX00IFGL:Tax Status Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_jurn_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Jurisdiction Code for Profile : '
+               || 'XX00IFGL:Tax Jurisdiction Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cv_tax_rate_code IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Rate Code for Profile : '
+               || 'XX00IFGL:Tax Rate Code.';
+            RAISE l_exe_main_para_expt;
+         ELSIF (cn_tax_rate IS NULL)
+         THEN
+            lv_errbuf := 'Unable to extract the Default Tax Rate for Profile : '
+               || 'XX00IFGL:Tax Rate.';
+            RAISE l_exe_main_para_expt;
+         END IF;
+         /* 05-APR-2013 add end */
+
+         lv_block := '1-2';
+
+
+         -- Opening the Cursor for extracting Journal data
+         -- Added this curosr to rollback data based on header
+         FOR get_gl_header_id_rec IN get_gl_header_id
+         LOOP
+            BEGIN
+               lv_chk_line_err := 'N';
+               ln_proc_cnt_hdr := ln_proc_cnt_hdr + 1;
+               /* 05-APR-2013 add start*/
+               ln_proc_cnt_hdr_line := 0;
+               lv_je_header_num := TO_CHAR(xx00ifgl_je_header_num_seq.NEXTVAL);
+               /* 05-APR-2013 add start */
+
+               BEGIN
+                  SELECT COUNT (*)
+                    INTO ln_proc_cnt_line_temp
+                    FROM xx00ifgl_inv_gl_journal_data
+                   /* 05-APR-2013 modify start */
+                   --WHERE je_header_id = get_gl_header_id_rec.je_header_id;
+                   WHERE transaction_id = get_gl_header_id_rec.transaction_id
+                     AND user_je_category_name =
+                         get_gl_header_id_rec.user_je_category_name;
+                   /* 05-APR-2013 modify end */
+               END;
+
+               ln_proc_cnt_line := ln_proc_cnt_line + ln_proc_cnt_line_temp;
+
+               lv_block := '2-0';
+               --
+               --Opening the Cursor for extracting Journal data
+               --
+               FOR get_gl_new_data_rec IN
+               /* 05-APR-2013 modify start */
+               --   get_gl_new_data (get_gl_header_id_rec.je_header_id)
+                  get_gl_new_data (
+                     get_gl_header_id_rec.transaction_id,
+                     get_gl_header_id_rec.user_je_category_name)
+               /* 05-APR-2013 modify end */
+               LOOP
+                  BEGIN
+
+                     ln_proc_cnt_hdr_line := ln_proc_cnt_hdr_line + 1; /* 05-APR-2013 add */
+                     lrt_xx00gl_interface := NULL;
+                     lv_gl_err_msg := NULL;
+                     lv_gl_err_msg := 'Error in extracting GL Data:';
+
+                     lv_block := '2-1';
+
+                     BEGIN
+
+                        /* 05-APR-2013 modify start */
+                        /*
+                        lrt_xx00gl_interface.je_header_num :=
+                                             get_gl_new_data_rec.je_header_id;
+                        lrt_xx00gl_interface.je_line_num :=
+                                              get_gl_new_data_rec.je_line_num;
+                        */
+                        lrt_xx00gl_interface.je_header_num := lv_je_header_num;
+                        lrt_xx00gl_interface.je_line_num :=
+                                                         ln_proc_cnt_hdr_line;
+                        lrt_xx00gl_interface.transaction_id :=
+                                           get_gl_new_data_rec.transaction_id;
+                        lrt_xx00gl_interface.org_id :=
+                                                 lt_sess_info_str_type.org_id;
+                        /* 05-APR-2013 modify end */
+
+                        lrt_xx00gl_interface.je_category_key :=
+                                    get_gl_new_data_rec.user_je_category_name;
+                        lrt_xx00gl_interface.user_je_source_name :=
+                                      get_gl_new_data_rec.user_je_source_name;
+                        lrt_xx00gl_interface.accounting_date :=
+                                          get_gl_new_data_rec.accounting_date;
+
+                        IF get_gl_new_data_rec.entered_dr IS NULL
+                        THEN
+                           lrt_xx00gl_interface.cr_dr_flag := 'C';
+                        ELSE
+                           lrt_xx00gl_interface.cr_dr_flag := 'D';
+                        END IF;
+
+                        BEGIN
+                           SELECT segment1,
+                                  segment2,
+                                  segment3,
+                                  segment4,
+                                  segment5,
+                                  segment6,
+                                  segment7,
+                                  segment8,
+                                  segment9,
+                                  segment10,
+                                  segment11
+                             INTO lrt_xx00gl_interface.segment1,
+                                  lrt_xx00gl_interface.segment2,
+                                  lrt_xx00gl_interface.segment3,
+                                  lrt_xx00gl_interface.segment4,
+                                  lrt_xx00gl_interface.segment5,
+                                  lrt_xx00gl_interface.segment6,
+                                  lrt_xx00gl_interface.segment7,
+                                  lrt_xx00gl_interface.segment8,
+                                  lrt_xx00gl_interface.segment9,
+                                  lrt_xx00gl_interface.segment10,
+                                  lrt_xx00gl_interface.segment11
+                             FROM gl_code_combinations_kfv
+                            WHERE code_combination_id =
+                                       get_gl_new_data_rec.code_combination_id;
+                        EXCEPTION
+                           WHEN OTHERS
+                           THEN
+                              lv_gl_err_msg :=
+                                 'Error while fetching the GL code combination data';
+                              RAISE l_exe_gl_ins_expt;
+                        END;
+
+                        lrt_xx00gl_interface.period_name :=
+                                               get_gl_new_data_rec.period_name;
+                        lrt_xx00gl_interface.reference1 := NULL;
+                        lrt_xx00gl_interface.reference2 := NULL;
+                        lrt_xx00gl_interface.reference4 := NULL;
+                        lrt_xx00gl_interface.reference5 :=
+                                                get_gl_new_data_rec.reference5;
+                        lrt_xx00gl_interface.reference6 := NULL;
+                        lrt_xx00gl_interface.reference7 :=
+                                                get_gl_new_data_rec.reference7;
+                        lrt_xx00gl_interface.reference8 :=
+                                                get_gl_new_data_rec.reference8;
+                        lrt_xx00gl_interface.reference9 :=
+                                                get_gl_new_data_rec.reference9;
+                        lrt_xx00gl_interface.reference10 :=
+                                               get_gl_new_data_rec.reference10;
+                        lrt_xx00gl_interface.jgzz_recon_ref :=
+                                            get_gl_new_data_rec.jgzz_recon_ref;
+
+                        /* 05-APR-2013 modify start */
+                        /*
+                        lrt_xx00gl_interface.tax_regime_code := NULL;
+                        lrt_xx00gl_interface.tax :=
+                                                  get_gl_new_data_rec.tax_code;
+                        lrt_xx00gl_interface.tax_status_code := NULL;
+                        lrt_xx00gl_interface.tax_jurisdiction_code := NULL;
+                        lrt_xx00gl_interface.tax_rate_code := NULL;
+                        lrt_xx00gl_interface.tax_rate := NULL;
+                        */
+                        IF    get_gl_new_data_rec.tax_regime_code IS NULL
+                          AND get_gl_new_data_rec.tax_code IS NULL
+                          AND get_gl_new_data_rec.tax_status_code IS NULL
+                          AND get_gl_new_data_rec.tax_jurisdiction_code IS NULL
+                          AND get_gl_new_data_rec.tax_rate_code IS NULL
+                          AND get_gl_new_data_rec.tax_rate IS NULL
+                        THEN
+                           lrt_xx00gl_interface.tax_regime_code := cv_tax_rege_code;
+                           lrt_xx00gl_interface.tax := cv_tax_code;
+                           lrt_xx00gl_interface.tax_status_code := cv_tax_stas_code;
+                           lrt_xx00gl_interface.tax_jurisdiction_code := cv_tax_jurn_code;
+                           lrt_xx00gl_interface.tax_rate_code := cv_tax_rate_code;
+                           lrt_xx00gl_interface.tax_rate := cn_tax_rate;
+                        ELSE
+                           lrt_xx00gl_interface.tax_regime_code :=
+                                           get_gl_new_data_rec.tax_regime_code;
+                           lrt_xx00gl_interface.tax :=
+                                                  get_gl_new_data_rec.tax_code;
+                           lrt_xx00gl_interface.tax_status_code :=
+                                           get_gl_new_data_rec.tax_status_code;
+                           lrt_xx00gl_interface.tax_jurisdiction_code :=
+                                     get_gl_new_data_rec.tax_jurisdiction_code;
+                           lrt_xx00gl_interface.tax_jurisdiction_code :=
+                                             get_gl_new_data_rec.tax_rate_code;
+                           lrt_xx00gl_interface.tax_rate :=
+                                                  get_gl_new_data_rec.tax_rate;
+                        END IF;
+                        /* 05-APR-2013 modify end */
+
+                        lrt_xx00gl_interface.tax_line_group :=
+                                               get_gl_new_data_rec.reference11;
+                        lrt_xx00gl_interface.attribute1 :=
+                                                get_gl_new_data_rec.attribute1;
+                        lrt_xx00gl_interface.attribute2 :=
+                                                get_gl_new_data_rec.attribute2;
+                        lrt_xx00gl_interface.attribute3 :=
+                                                get_gl_new_data_rec.attribute3;
+                        lrt_xx00gl_interface.attribute4 :=
+                                                get_gl_new_data_rec.attribute4;
+                        lrt_xx00gl_interface.attribute5 :=
+                                                get_gl_new_data_rec.attribute5;
+                        lrt_xx00gl_interface.attribute6 :=
+                                                get_gl_new_data_rec.attribute6;
+                        lrt_xx00gl_interface.attribute7 :=
+                                                get_gl_new_data_rec.attribute7;
+                        lrt_xx00gl_interface.attribute8 :=
+                                                get_gl_new_data_rec.attribute8;
+                        lrt_xx00gl_interface.attribute9 :=
+                                                get_gl_new_data_rec.attribute9;
+                        lrt_xx00gl_interface.attribute10 :=
+                                               get_gl_new_data_rec.attribute10;
+                        lrt_xx00gl_interface.attribute11 :=
+                                               get_gl_new_data_rec.attribute11;
+                        lrt_xx00gl_interface.attribute12 :=
+                                               get_gl_new_data_rec.attribute12;
+                        lrt_xx00gl_interface.attribute13 :=
+                                               get_gl_new_data_rec.attribute13;
+                        lrt_xx00gl_interface.attribute14 :=
+                                               get_gl_new_data_rec.attribute14;
+                        lrt_xx00gl_interface.attribute15 :=
+                                               get_gl_new_data_rec.attribute15;
+                        lrt_xx00gl_interface.attribute16 :=
+                                               get_gl_new_data_rec.attribute16;
+                        lrt_xx00gl_interface.attribute17 :=
+                                               get_gl_new_data_rec.attribute17;
+                        lrt_xx00gl_interface.attribute18 :=
+                                               get_gl_new_data_rec.attribute18;
+                        lrt_xx00gl_interface.attribute19 :=
+                                               get_gl_new_data_rec.attribute19;
+                        lrt_xx00gl_interface.attribute20 :=
+                                               get_gl_new_data_rec.attribute20;
+                        lrt_xx00gl_interface.xx_attribute1 := NULL;
+                        lrt_xx00gl_interface.xx_attribute2 := NULL;
+                        lrt_xx00gl_interface.xx_attribute3 := NULL;
+                        lrt_xx00gl_interface.xx_attribute4 := NULL;
+                        lrt_xx00gl_interface.xx_attribute5 := NULL;
+                        lrt_xx00gl_interface.xx_attribute6 := NULL;
+                        lrt_xx00gl_interface.xx_attribute7 := NULL;
+                        lrt_xx00gl_interface.xx_attribute8 := NULL;
+                        lrt_xx00gl_interface.xx_attribute9 := NULL;
+                        lrt_xx00gl_interface.xx_attribute10 := NULL;
+                        lrt_xx00gl_interface.xx_attribute11 := NULL;
+                        lrt_xx00gl_interface.xx_attribute12 := NULL;
+                        lrt_xx00gl_interface.xx_attribute13 := NULL;
+                        lrt_xx00gl_interface.xx_attribute14 := NULL;
+                        lrt_xx00gl_interface.xx_attribute15 := NULL;
+                        lrt_xx00gl_interface.xx_attribute16 := NULL;
+                        lrt_xx00gl_interface.xx_attribute17 := NULL;
+                        lrt_xx00gl_interface.xx_attribute18 := NULL;
+                        lrt_xx00gl_interface.xx_attribute19 := NULL;
+                        lrt_xx00gl_interface.xx_attribute20 := NULL;
+                        lrt_xx00gl_interface.xx_attribute21 := NULL;
+                        lrt_xx00gl_interface.xx_attribute22 := NULL;
+                        lrt_xx00gl_interface.xx_attribute23 := NULL;
+                        lrt_xx00gl_interface.xx_attribute24 := NULL;
+                        lrt_xx00gl_interface.xx_attribute25 := NULL;
+                        lrt_xx00gl_interface.xx_attribute26 := NULL;
+                        lrt_xx00gl_interface.xx_attribute27 := NULL;
+                        lrt_xx00gl_interface.xx_attribute28 := NULL;
+                        lrt_xx00gl_interface.xx_attribute29 := NULL;
+                        lrt_xx00gl_interface.xx_attribute30 := NULL;
+                        lrt_xx00gl_interface.xx_attribute31 := NULL;
+                        lrt_xx00gl_interface.xx_attribute32 := NULL;
+                        lrt_xx00gl_interface.xx_attribute33 := NULL;
+                        lrt_xx00gl_interface.xx_attribute34 := NULL;
+                        lrt_xx00gl_interface.xx_attribute35 := NULL;
+                        lrt_xx00gl_interface.xx_attribute36 := NULL;
+                        lrt_xx00gl_interface.xx_attribute37 := NULL;
+                        lrt_xx00gl_interface.xx_attribute38 := NULL;
+                        lrt_xx00gl_interface.xx_attribute39 := NULL;
+                        lrt_xx00gl_interface.xx_attribute40 := NULL;
+                        lrt_xx00gl_interface.xx_attribute41 := NULL;
+                        lrt_xx00gl_interface.xx_attribute42 := NULL;
+                        lrt_xx00gl_interface.xx_attribute43 := NULL;
+                        lrt_xx00gl_interface.xx_attribute44 := NULL;
+                        lrt_xx00gl_interface.xx_attribute45 := NULL;
+                        lrt_xx00gl_interface.entered_dr :=
+                                                get_gl_new_data_rec.entered_dr;
+                        lrt_xx00gl_interface.entered_cr :=
+                                                get_gl_new_data_rec.entered_cr;
+                        lrt_xx00gl_interface.accounted_dr :=
+                                              get_gl_new_data_rec.accounted_dr;
+                        lrt_xx00gl_interface.accounted_cr :=
+                                              get_gl_new_data_rec.accounted_cr;
+                        lrt_xx00gl_interface.currency_code :=
+                                             get_gl_new_data_rec.currency_code;
+                        lrt_xx00gl_interface.currency_conversion_date :=
+                                  get_gl_new_data_rec.currency_conversion_date;
+                        lrt_xx00gl_interface.user_currency_conversion_type :=
+                             get_gl_new_data_rec.user_currency_conversion_type;
+                        lrt_xx00gl_interface.currency_conversion_rate :=
+                                  get_gl_new_data_rec.currency_conversion_rate;
+                        lrt_xx00gl_interface.code_combination_id :=
+                                       get_gl_new_data_rec.code_combination_id;
+                        lrt_xx00gl_interface.status :=
+                                                    get_gl_new_data_rec.status;
+                        lrt_xx00gl_interface.actual_flag :=
+                                               get_gl_new_data_rec.actual_flag;
+                        lrt_xx00gl_interface.ledger_name := gv_xx01ledg_name;
+                        lrt_xx00gl_interface.process_status :=
+                                               xx00ifcmn_const_sv.cv_extracted;
+                        lrt_xx00gl_interface.error_flag := NULL;
+                        lrt_xx00gl_interface.error_message := NULL;
+                        lrt_xx00gl_interface.legal_entity_id :=
+                                                          ln_xx01_legal_ent_id;
+                        lrt_xx00gl_interface.created_by :=
+                                                 lt_sess_info_str_type.user_id;
+                        lrt_xx00gl_interface.creation_date := gd_xx02_sysdate;
+                        lrt_xx00gl_interface.last_updated_by :=
+                                                 lt_sess_info_str_type.user_id;
+                        lrt_xx00gl_interface.last_update_date :=
+                                                               gd_xx02_sysdate;
+                        lrt_xx00gl_interface.last_update_login :=
+                                                lt_sess_info_str_type.login_id;
+                        lrt_xx00gl_interface.request_id :=
+                                         lt_sess_info_str_type.conc_request_id;
+                        lrt_xx00gl_interface.program_application_id :=
+                                            lt_sess_info_str_type.prog_appl_id;
+                        lrt_xx00gl_interface.program_id :=
+                                         lt_sess_info_str_type.conc_program_id;
+                        lrt_xx00gl_interface.program_update_date :=
+                                                               gd_xx02_sysdate;
+                     EXCEPTION
+                        WHEN OTHERS
+                        THEN
+                           lv_gl_err_msg :=
+                                 lv_gl_err_msg
+                              || 'Error while assigning the values to the GL IF Record:'
+                              || SQLERRM;
+                           RAISE l_exe_gl_ins_expt;
+                     END;
+
+                     lv_block := '2-2';
+
+                     --
+                     --Calling populate_gl_stg for insertion into staging table
+                     --
+                     BEGIN
+                        populate_gl_stg (lv_gl_err_msg_add,
+                                         lv_retcode,
+                                         lrt_xx00gl_interface
+                                        );
+
+                        IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                        THEN
+                           lv_gl_err_msg :=
+                              SUBSTR (lv_gl_err_msg || lv_gl_err_msg_add,
+                                      1,
+                                      4000
+                                     );
+                           RAISE l_exe_gl_ins_expt;
+                        END IF;
+                     END;
+
+                     lv_block := '2-3';
+
+                     /* 05-APR-2013 delete start */
+                     /*
+                     UPDATE gl_interface
+                        SET status = 'INTERFACED'
+                      WHERE je_line_num = get_gl_new_data_rec.je_line_num
+                        AND je_header_id = get_gl_new_data_rec.je_header_id;
+                     */
+                     /* 05-APR-2013 delete end */
+
+                     lv_block := '2-4';
+                  --
+                  --End of  Loop
+                  --
+                  EXCEPTION
+                     WHEN l_exe_gl_ins_expt
+                     THEN
+                        lv_chk_line_err := 'Y';
+                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                        ROLLBACK;
+                     WHEN OTHERS
+                     THEN
+                        lv_chk_line_err := 'Y';
+                        lv_gl_err_msg :=
+                              lv_gl_err_msg
+                           || SUBSTRB (   cv_proc_name
+                                       || cv_period
+                                       || lv_block
+                                       || cv_delimiter_msg
+                                       || SQLERRM,
+                                       1,
+                                       5000
+                                      );
+                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                        ROLLBACK;
+                  END;
+
+                  lv_block := '2-5';
+               END LOOP;
+
+               IF lv_chk_line_err = 'Y'
+               THEN
+
+                  lv_gl_err_msg :=
+                     /* 05-APR-2013 modify start */
+                     --   'Error occured while Inserting Line Details. Header Id '
+                     --|| get_gl_header_id_rec.je_header_id
+                        'Error occured while Inserting Line Details. '
+                     || 'Category name - Transaction Id '
+                     || get_gl_header_id_rec.user_je_category_name
+                     || '-'
+                     || get_gl_header_id_rec.transaction_id
+                     /* 05-APR-2013 modify end */
+                     || ' is rollbacked';
+                  xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                  ROLLBACK;
+               ELSE
+
+                  COMMIT;
+               END IF;
+            END;
+         END LOOP;
+
+         lv_block := '3-0';
+         ov_retcode := xx00ifcmn_const_sv.cv_success;
+         ov_errbuf := NULL;
+--
+--End of Main Block
+--
+      EXCEPTION
+         WHEN l_exe_main_para_expt
+         THEN
+            lv_errbuf :=
+                  lv_errbuf
+               || SUBSTRB (   cv_proc_name
+                           || cv_period
+                           || lv_block
+                           || cv_delimiter_msg,
+                           1,
+                           5000
+                          );
+            -- set out parameter
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to outlog
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         WHEN user_session_info_expt
+         THEN
+            -- set out parameter
+            lv_errbuf :=
+                  lv_errbuf
+               || SUBSTRB (   cv_proc_name
+                           || cv_period
+                           || lv_block
+                           || cv_delimiter_msg,
+                           1,
+                           5000
+                          );
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to outlog
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         --
+         WHEN OTHERS
+         THEN
+            -- set out parameter
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            -- output to concurrent log
+            fnd_file.put_line (fnd_file.LOG, ov_errbuf);
+            ROLLBACK;
+      END;
+
+      lv_block := '4-0';
+      BEGIN
+         BEGIN
+            SELECT fcp.concurrent_program_name,
+                   fcpt.user_concurrent_program_name
+              INTO lv_program_short_name,
+                   lv_program_name
+              FROM fnd_concurrent_programs_tl fcpt,
+                   fnd_concurrent_programs fcp
+             WHERE fcp.concurrent_program_id = fcpt.concurrent_program_id
+               AND fcpt.language = userenv('LANG') /* 05-APR-2013 add */
+               AND fcp.concurrent_program_id =
+                                         lt_sess_info_str_type.conc_program_id;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               lv_program_short_name := NULL;
+               lv_program_name := NULL;
+         END;
+
+         lv_block := '4-1';
+         IF ov_retcode = xx00ifcmn_const_sv.cv_success
+         THEN
+            lt_msg_footer_atype (1) := lv_program_name || ' is normal ended';
+         ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+         THEN
+            lt_msg_footer_atype (1) := lv_program_name || ' is normal error';
+         ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+         THEN
+            lt_msg_footer_atype (1) :=
+                                      lv_program_name || ' is normal warning';
+         END IF;
+
+         ld_date_input := SYSDATE;
+
+         lv_block := '4-2';
+         BEGIN
+            SELECT COUNT (DISTINCT je_header_num)
+              INTO ln_norm_proc_cnt_hdr
+              FROM xx00ifgl_journal_stg
+             WHERE request_id = lt_sess_info_str_type.conc_request_id;
+         END;
+
+         BEGIN
+            SELECT COUNT (*)
+              INTO ln_norm_proc_cnt_line
+              FROM xx00ifgl_journal_stg
+             WHERE request_id = lt_sess_info_str_type.conc_request_id;
+         END;
+
+         lv_block := '4-3';
+         ln_err_proc_cnt_hdr := ln_proc_cnt_hdr - ln_norm_proc_cnt_hdr;
+         ln_err_proc_cnt_line := ln_proc_cnt_line - ln_norm_proc_cnt_line;
+         xx00ifcmn_conc_outp_sv.cmn_conc_outp
+                                       (lv_errbuf,
+                                        lv_retcode,
+                                        gd_xx02_sysdate,
+                                        lt_sess_info_str_type.org_name,
+                                        lt_sess_info_str_type.conc_request_id,
+                                        lv_program_short_name,
+                                        lv_program_name,
+                                        lt_msg_line_atype,
+                                        'Y',
+                                        ln_proc_cnt_hdr,
+                                        ln_proc_cnt_line,
+                                        ln_norm_proc_cnt_hdr,
+                                        ln_norm_proc_cnt_line,
+                                        ln_err_proc_cnt_hdr,
+                                        ln_err_proc_cnt_line,
+                                        lt_msg_footer_atype,
+                                        ld_date_input
+                                       );
+
+         IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+         THEN
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+         ELSE
+	    ov_retcode := xx00ifcmn_const_sv.cv_success;
+            ov_errbuf := lv_program_name||' Completed Successfully';
+         END IF;
+      END;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         -- set out parameter
+         ov_errbuf :=
+            SUBSTRB (   cv_proc_name
+                     || cv_period
+                     || lv_block
+                     || cv_delimiter_msg
+                     || SQLERRM,
+                     1,
+                     5000
+                    );
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         -- output to concurrent log
+         xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         ROLLBACK;
+   END main_extr;
+
+/********************************************************************************************************
+*  Procedure Name       :   main_conv
+*  Description          :   Conversion and Error Check for GL Data
+********************************************************************************************************/
+   PROCEDURE main_conv (
+      ov_errbuf    OUT   VARCHAR2,                          --   error message
+      ov_retcode   OUT   VARCHAR2                             --   return code
+      ,iv_source_name IN   VARCHAR2       --01-SEP-2014 add v1.02
+      ,iv_period_name IN   VARCHAR2       --01-SEP-2014 add v1.02
+   )
+   IS
+      --
+      --Local Variable Declaration
+      --
+
+      -- ===============================
+      -- local Constant
+      -- ===============================
+      cv_proc_name        CONSTANT VARCHAR2 (100)              := 'main_conv';
+      -- procedure name
+      cv_proc_desc        CONSTANT VARCHAR2 (50)      := 'GL Data Conversion';
+                                                        -- process description
+    --
+    -- *** local Constant user define ***
+    -- ===============================
+    -- local variable
+    -- ===============================
+      lv_errbuf                    VARCHAR2 (4000);          -- error message
+      lv_err_msg_add               VARCHAR2 (4000);          -- error message
+      l_hdr_ins_expt               EXCEPTION;
+      lv_retcode                   VARCHAR2 (1);               -- return code
+      lv_errmsg                    VARCHAR2 (4000);        -- user error code
+
+      lv_block                     VARCHAR2 (10);     -- process block number
+
+      lt_sess_info_str_type        xx00ifcmn_conc_init_proc_sv.sess_info_str_type;
+
+      --
+      --Local Variable Declaration
+      --
+      lrt_xx00ap_headers_stg_dmy   xx00ifap_invoice_hdr_stg%ROWTYPE;
+      lrt_xx00ap_lines_stg_dmy     xx00ifap_invoice_line_stg%ROWTYPE;
+      lrt_xx00ar_headers_stg_dmy   xx00ifar_trx_hdr_stg%ROWTYPE;
+      lrt_xx00ar_lines_stg_dmy     xx00ifar_trx_line_stg%ROWTYPE;
+      lrt_xx00gl_journal_stg       xx00ifgl_journal_stg%ROWTYPE;
+      user_session_info_expt       EXCEPTION;
+      l_exe_gl_ins_expt            EXCEPTION;
+      l_exe_main_para_expt         EXCEPTION;
+      lv_gl_err_msg                VARCHAR2 (4000);
+      lv_gl_err_msg_add            VARCHAR2 (4000);
+      lv_err_type                  VARCHAR2 (50);
+      lv_err_code                  VARCHAR2 (10);
+      lv_chk_line_err              VARCHAR2 (1);
+      lv_gl_line_err_msg           VARCHAR2 (4000);
+      ltt_gl_stg                   tbl_gl_stg;
+      ltt_ap_chk_head              xx00ifap_interface_conc_sv.tbl_ap_stg_head;
+      ltt_ap_chk_line              xx00ifap_interface_conc_sv.tbl_ap_stg_line;
+      ltt_ar_chk_head              xx00ifar_interface_conc_sv.tbl_ar_stg_head ;
+      ltt_ar_chk_line              xx00ifar_interface_conc_sv.tbl_ar_stg_line ;
+      ln_proc_cnt_hdr              NUMBER                              := '0';
+      ln_proc_cnt_line             NUMBER                              := '0';
+      ln_proc_cnt_line_temp        NUMBER                              := '0';
+      ln_norm_proc_cnt_hdr         NUMBER                              := '0';
+      ln_norm_proc_cnt_line        NUMBER                              := '0';
+      ln_err_proc_cnt_hdr          NUMBER                              := '0';
+      ln_err_proc_cnt_line         NUMBER                              := '0';
+      ld_date_input                DATE;
+      lv_program_short_name        VARCHAR2 (50);
+      lv_program_name              VARCHAR2 (100);
+      lt_msg_line_atype            xx00ifcmn_conc_outp_sv.message_line_atype;
+      lt_msg_footer_atype          xx00ifcmn_conc_outp_sv.message_footer_atype;
+      ln_counter                   NUMBER;
+      l_exe_gl_line_expt           EXCEPTION;
+      l_exe_gl_line_conv_expt      EXCEPTION;
+      l_exe_gl_err_chk_expt 	   EXCEPTION;
+      lv_error                     VARCHAR2(1);      --04-JUN-2014 add v1.01
+
+      CURSOR get_gl_if_data (lv_num_header_id NUMBER)
+      IS
+         SELECT *
+           FROM xx00ifgl_journal_stg
+          WHERE process_status NOT IN (xx00ifcmn_const_sv.cv_interface)
+            AND je_header_num = lv_num_header_id;
+
+      CURSOR get_gl_if_header_data
+      IS
+         SELECT   je_header_num
+             FROM xx00ifgl_journal_stg
+            WHERE process_status NOT IN (xx00ifcmn_const_sv.cv_interface)
+            AND UPPER(period_name) = UPPER(NVL(iv_period_name,period_name))                     --11-SEP-2014 add v1.03
+            AND UPPER(user_je_source_name) = UPPER(NVL(iv_source_name,user_je_source_name))     --11-SEP-2014 add v1.03
+--            AND UPPER(period_name) = UPPER(iv_period_name)             --01-SEP-2014 add v1.02 --11-SEP-2014 delete v1.03
+--            AND UPPER(user_je_source_name) = UPPER(iv_source_name)     --01-SEP-2014 add v1.02 --11-SEP-2014 delete v1.03
+         GROUP BY je_header_num;
+   BEGIN
+      BEGIN
+         lv_block := '0';
+-- ===============================================
+-- Initialize process
+-- ===============================================
+         lv_retcode := xx00ifcmn_const_sv.cv_success;               -- normal
+         ov_retcode := xx00ifcmn_const_sv.cv_success;
+         -- normal
+         lv_errbuf := NULL;
+         --
+         lv_block := '1-0';
+         --
+         --Extracting the Legal Entity Id
+         --
+         xx00ifcmn_conc_init_proc_sv.get_sess_info
+                                      (ov_errbuf          => lv_errbuf,
+                                       ov_retcode         => lv_retcode,
+                                       ort_sess_info      => lt_sess_info_str_type
+                                      );
+
+
+         IF (lv_retcode = xx00ifcmn_const_sv.cv_error)
+         THEN
+            RAISE user_session_info_expt;
+         END IF;
+
+         lt_msg_line_atype := xx00ifcmn_conc_outp_sv.message_line_atype (NULL);
+         lt_msg_footer_atype :=
+                            xx00ifcmn_conc_outp_sv.message_footer_atype (NULL);
+
+         lv_block := '1-1';
+         BEGIN
+            UPDATE xx00ifgl_journal_stg
+               SET error_flag = NULL,
+                   error_message = NULL
+             WHERE process_status IN
+                      (xx00ifcmn_const_sv.cv_conv_err,
+                       xx00ifcmn_const_sv.cv_err_chk_f
+                      );
+
+            COMMIT;
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               xx00ifcmn_func_util_sv.writelog
+                        (   'Error occured while updating GL Staging Tables:'
+                         || SQLERRM
+                        );
+         END;
+
+
+         lv_block := '2-0';
+
+         --
+         --Opening Cursor to extract header data
+         --
+         FOR get_gl_if_header_data_rec IN get_gl_if_header_data
+         LOOP
+            BEGIN
+               lv_block := '2-1';
+               lv_chk_line_err := 'N';
+               lv_gl_line_err_msg := NULL;
+               lv_gl_err_msg :=
+                        'Error : ' || get_gl_if_header_data_rec.je_header_num;
+               ln_counter := '0';
+               ltt_gl_stg (1) := NULL;
+               ln_proc_cnt_hdr := ln_proc_cnt_hdr + 1;
+
+               lv_block := '2-2';
+               BEGIN
+                  SELECT COUNT (*)
+                    INTO ln_proc_cnt_line_temp
+                    FROM xx00ifgl_journal_stg
+                   WHERE process_status NOT IN
+                                            (xx00ifcmn_const_sv.cv_interface)
+                     AND je_header_num =
+                                       get_gl_if_header_data_rec.je_header_num;
+               END;
+
+               ln_proc_cnt_line := ln_proc_cnt_line + ln_proc_cnt_line_temp;
+
+               --
+               --Opening the Cursor to extract the Line Data
+               --
+               lv_block := '2-3';
+               FOR get_gl_if_data_rec IN
+                  get_gl_if_data (get_gl_if_header_data_rec.je_header_num)
+               LOOP
+                  BEGIN
+                     lv_block := '2-4';
+                     lv_gl_err_msg :=
+                           'Error in JE Header Num-JE Line Num:'
+                        || get_gl_if_header_data_rec.je_header_num
+                        || '-'
+                        || get_gl_if_data_rec.je_line_num;
+                     ln_counter := ln_counter + 1;
+                     ltt_gl_stg (ln_counter) := NULL;
+                     lrt_xx00gl_journal_stg := get_gl_if_data_rec;
+
+
+                     lv_block := '2-5';
+                     BEGIN
+                        xx00ifcmn_func_util_sv.conv_error_check
+                                                 (lv_gl_err_msg_add,
+                                                  lv_retcode,
+                                                  lv_err_type,
+                                                  'L',
+                                                  'GL',
+                                                  lrt_xx00ap_headers_stg_dmy,
+                                                  lrt_xx00ap_lines_stg_dmy,
+                                                  lrt_xx00ar_headers_stg_dmy,
+                                                  lrt_xx00ar_lines_stg_dmy,
+                                                  lrt_xx00gl_journal_stg
+                                                 );
+
+                        IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                        THEN
+                           lv_gl_err_msg :=
+                              SUBSTR (   lv_gl_err_msg
+                                      || '.Error:'
+                                      || lv_gl_err_msg_add,
+                                      1,
+                                      4000
+                                     );
+                           RAISE l_exe_gl_ins_expt;
+                        END IF;
+                     END;
+
+                     lv_block := '2-6';
+                     ltt_gl_stg (ln_counter) := lrt_xx00gl_journal_stg;
+
+                  EXCEPTION
+                     WHEN l_exe_gl_ins_expt
+                     THEN
+                        lv_block := '2-7';
+                        lv_chk_line_err := 'Y';
+
+                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+
+                        BEGIN
+                           lv_err_type := xx00ifcmn_const_sv.cv_conv_err;
+                           xx00ifcmn_func_util_sv.update_error_status
+                                       (lv_errmsg,
+                                        lv_retcode,
+                                        'GL',
+                                        lv_err_type,
+                                        'L',
+                                        'E',
+                                        lrt_xx00gl_journal_stg.je_header_num,
+                                        lrt_xx00gl_journal_stg.je_line_num,
+                                        NULL,
+                                        lv_gl_err_msg
+                                       );
+
+                           IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                           THEN
+                              xx00ifcmn_func_util_sv.writelog (   'Err: '
+                                                               || SQLERRM
+                                                               || lv_errmsg
+                                                              );
+                           END IF;
+                        END;
+                     WHEN OTHERS
+                     THEN
+                        lv_chk_line_err := 'Y';
+                        lv_block := '2-8';
+                        lv_gl_err_msg :=
+                           SUBSTR (lv_gl_err_msg || ' :' || SQLERRM, 1, 4000);
+                        xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+
+                        BEGIN
+                           lv_err_type := xx00ifcmn_const_sv.cv_conv_err;
+                           xx00ifcmn_func_util_sv.update_error_status
+                                       (lv_errmsg,
+                                        lv_retcode,
+                                        'GL',
+                                        lv_err_type,
+                                        'L',
+                                        'E',
+                                        lrt_xx00gl_journal_stg.je_header_num,
+                                        lrt_xx00gl_journal_stg.je_line_num,
+                                        NULL,
+                                        lv_gl_err_msg
+                                       );
+
+                           IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                           THEN
+                              xx00ifcmn_func_util_sv.writelog (   'Err: '
+                                                               || SQLERRM
+                                                               || lv_errmsg
+                                                              );
+                           END IF;
+                        END;
+                  END;
+               END LOOP;
+               lv_block := '3-0';
+
+               IF lv_chk_line_err = 'Y'
+               THEN
+                  lv_err_type := xx00ifcmn_const_sv.cv_conv_err;
+                  RAISE l_exe_gl_line_conv_expt;
+               END IF;
+
+               lv_block := '3-1';
+               BEGIN
+                  xx00ifcmn_err_check_sv.gl_err_chk (lv_gl_err_msg_add,
+                                                     lv_retcode,
+                                                     ltt_gl_stg
+                                                    );
+
+                  IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                  THEN
+
+                     lv_err_type := xx00ifcmn_const_sv.cv_err_chk_f;
+                     lv_gl_err_msg := lv_gl_err_msg || lv_gl_err_msg_add;
+
+                    /* 04-JUN-2014 modify start v1.01*/
+
+ 		     xx00ifcmn_func_util_sv.update_err_chk_error
+				    (lv_errmsg,
+				     lv_retcode,
+				     'GL',
+				     ltt_ap_chk_head,
+				     ltt_ap_chk_line,
+		 		     ltt_ar_chk_head,
+				     ltt_ar_chk_line,
+				     ltt_gl_stg,
+                                     lv_error
+				    );
+
+                     IF lv_error = 'Y' THEN
+                    /* 04-JUN-2014 modify end v1.01*/
+
+                      RAISE l_exe_gl_err_chk_expt;
+
+                     END IF; --04-JUN-2014 add v1.01
+
+                  END IF;
+               END;
+
+               lv_block := '3-2';
+               BEGIN
+                  populate_gl_if (lv_gl_err_msg_add, lv_retcode, ltt_gl_stg);
+
+                  IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                  THEN
+                     lv_err_type := xx00ifcmn_const_sv.cv_conv_err;
+                     lv_gl_err_msg := lv_gl_err_msg || lv_gl_err_msg_add;
+                     ltt_gl_stg.DELETE;
+                     RAISE l_exe_gl_line_expt;
+                  ELSE
+                     ltt_gl_stg.DELETE;
+                  END IF;
+               END;
+
+               lv_block := '3-3';
+               BEGIN
+                  xx00ifcmn_func_util_sv.update_error_status
+                                       (lv_errmsg,
+                                        lv_retcode,
+                                        'GL',
+                                        xx00ifcmn_const_sv.cv_interface,
+                                        'H',
+                                        'S',
+                                        lrt_xx00gl_journal_stg.je_header_num,
+                                        NULL,
+                                        NULL,
+                                        NULL
+                                       );
+
+                  IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                  THEN
+                     xx00ifcmn_func_util_sv.writelog (   'Err2: '
+                                                      || SQLERRM
+                                                      || lv_errmsg
+                                                     );
+                  END IF;
+               END;
+
+               lv_block := '4-0';
+
+               COMMIT;
+            EXCEPTION
+               WHEN l_exe_gl_line_expt
+               THEN
+                  lv_block := '4-1';
+                  xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg);
+                  ROLLBACK;
+
+                  BEGIN
+                     lv_block := '4-2';
+                     xx00ifcmn_func_util_sv.update_error_status
+                                       (lv_errmsg,
+                                        lv_retcode,
+                                        'GL',
+                                        lv_err_type,
+                                        'H',
+                                        'E',
+                                        lrt_xx00gl_journal_stg.je_header_num,
+                                        NULL,
+                                        lv_gl_err_msg,
+                                        NULL
+                                       );
+
+                     IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+                     THEN
+                        xx00ifcmn_func_util_sv.writelog (   'Err: '
+                                                         || SQLERRM
+                                                         || lv_errmsg
+                                                        );
+                     END IF;
+                  END;
+
+                  COMMIT;
+               WHEN l_exe_gl_line_conv_expt
+               THEN
+                  COMMIT;
+               WHEN l_exe_gl_err_chk_expt
+                THEN
+
+		BEGIN
+
+           /*04-JUN-2014 Delete start v1.01
+		xx00ifcmn_func_util_sv.update_err_chk_error
+				    (lv_errmsg,
+				     lv_retcode,
+				     'GL',
+				     ltt_ap_chk_head,
+				     ltt_ap_chk_line,
+				    ltt_ar_chk_head,
+				    ltt_ar_chk_line,
+				    ltt_gl_stg
+				    );
+           04-JUN-2014 Delete end v1.01*/
+
+		IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+		THEN
+		  xx00ifcmn_func_util_sv.writelog (   'Err: '
+						   || SQLERRM
+						   || lv_errmsg
+						  );
+		END IF;
+		ltt_ap_chk_head.DELETE;
+		ltt_ap_chk_line.DELETE;
+		END;
+
+                  COMMIT;
+               WHEN OTHERS
+               THEN
+                  xx00ifcmn_func_util_sv.writelog (lv_gl_err_msg || SQLERRM);
+                  ROLLBACK;
+            END;
+            lv_block := '4-3';
+         END LOOP;
+
+      EXCEPTION
+         WHEN l_exe_main_para_expt
+         THEN
+            -- set out parameter
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 4000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+         WHEN user_session_info_expt
+         THEN
+            -- set out parameter
+            ov_errbuf := SUBSTRB (lv_errbuf, 1, 4000);
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+         WHEN OTHERS
+         THEN
+            -- set out parameter
+            ov_errbuf :=
+               SUBSTRB (   cv_proc_name
+                        || cv_period
+                        || lv_block
+                        || cv_delimiter_msg
+                        || SQLERRM,
+                        1,
+                        5000
+                       );
+            ov_retcode := xx00ifcmn_const_sv.cv_error;
+            xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+            ROLLBACK;
+      END;
+      lv_block := '5-0';
+
+      BEGIN
+         SELECT fcp.concurrent_program_name,
+                fcpt.user_concurrent_program_name
+           INTO lv_program_short_name,
+                lv_program_name
+           FROM fnd_concurrent_programs_tl fcpt, fnd_concurrent_programs fcp
+          WHERE fcp.concurrent_program_id = fcpt.concurrent_program_id
+            AND fcpt.language = userenv('LANG') /* 05-APR-2013 add */
+            AND fcp.concurrent_program_id =
+                                         lt_sess_info_str_type.conc_program_id;
+      EXCEPTION
+         WHEN OTHERS
+         THEN
+            lv_program_short_name := NULL;
+            lv_program_name := NULL;
+      END;
+
+      lv_block := '5-1';
+      BEGIN
+         SELECT COUNT (*)
+           INTO ln_norm_proc_cnt_hdr
+           FROM (SELECT   COUNT (*)
+                     FROM xx00ifgl_journal_if
+                    WHERE request_id = lt_sess_info_str_type.conc_request_id
+                 GROUP BY je_header_num);
+      END;
+
+      lv_block := '5-2';
+      BEGIN
+         SELECT COUNT (*)
+           INTO ln_norm_proc_cnt_line
+           FROM xx00ifgl_journal_if
+          WHERE request_id = lt_sess_info_str_type.conc_request_id;
+      END;
+
+      lv_block := '5-3';
+      IF ov_retcode = xx00ifcmn_const_sv.cv_success
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal ended';
+      ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal error';
+      ELSIF ov_retcode = xx00ifcmn_const_sv.cv_error
+      THEN
+         lt_msg_footer_atype (1) := lv_program_name || ' is normal warning';
+      END IF;
+
+      lv_block := '5-4';
+      ld_date_input := SYSDATE;
+      ln_err_proc_cnt_hdr := ln_proc_cnt_hdr - ln_norm_proc_cnt_hdr;
+      ln_err_proc_cnt_line := ln_proc_cnt_line - ln_norm_proc_cnt_line;
+      xx00ifcmn_conc_outp_sv.cmn_conc_outp
+                                       (lv_errbuf,
+                                        lv_retcode,
+                                        gd_xx02_sysdate,
+                                        lt_sess_info_str_type.org_name,
+                                        lt_sess_info_str_type.conc_request_id,
+                                        lv_program_short_name,
+                                        lv_program_name,
+                                        lt_msg_line_atype,
+                                        'Y',
+                                        ln_proc_cnt_hdr,
+                                        ln_proc_cnt_line,
+                                        ln_norm_proc_cnt_hdr,
+                                        ln_norm_proc_cnt_line,
+                                        ln_err_proc_cnt_hdr,
+                                        ln_err_proc_cnt_line,
+                                        lt_msg_footer_atype,
+                                        ld_date_input
+                                       );
+
+      lv_block := '5-5';
+      IF lv_retcode <> xx00ifcmn_const_sv.cv_success
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         ov_errbuf := SUBSTRB (lv_errbuf, 1, 5000);
+      ELSE
+         ov_retcode := xx00ifcmn_const_sv.cv_success;
+         ov_errbuf := lv_program_name||' Completed Successfully';
+      END IF;
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         -- set out parameter
+         ov_errbuf :=
+            SUBSTRB (   cv_proc_name
+                     || cv_period
+                     || lv_block
+                     || cv_delimiter_msg
+                     || SQLERRM,
+                     1,
+                     5000
+                    );
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         xx00ifcmn_func_util_sv.writelog (ov_errbuf);
+         ROLLBACK;
+   END main_conv;
+
+/********************************************************************************************************
+*  Procedure Name       :   populate_gl_line_if
+*  Description          :   Insertion of Data into GL Journal IF Table
+********************************************************************************************************/
+   PROCEDURE populate_gl_line_if (
+      ov_errbuf               OUT      VARCHAR2,            --   error message
+      ov_retcode              OUT      VARCHAR2,              --   return code
+      irt_xx00gl_journal_if   IN       xx00ifgl_journal_if%ROWTYPE
+   )
+   IS
+   BEGIN
+      ov_retcode := xx00ifcmn_const_sv.cv_success;
+
+      INSERT INTO xx00ifgl_journal_if
+                  (je_header_num,
+                   je_line_num,
+                   je_category_key,
+                   user_je_source_name,
+                   accounting_date,
+                   cr_dr_flag,
+                   period_name,
+                   reference1,
+                   reference2,
+                   reference4,
+                   reference5,
+                   reference6,
+                   reference7,
+                   reference8,
+                   reference9,
+                   reference10,
+                   jgzz_recon_ref,
+                   tax_regime_code,
+                   tax,
+                   tax_status_code,
+                   tax_jurisdiction_code,
+                   tax_rate_code,
+                   tax_rate,
+                   tax_line_group,
+                   segment1,
+                   segment2,
+                   segment3,
+                   segment4,
+                   segment5,
+                   segment6,
+                   segment7,
+                   segment8,
+                   segment9,
+                   segment10,
+                   segment11,
+                   attribute1,
+                   attribute2,
+                   attribute3,
+                   attribute4,
+                   attribute5,
+                   attribute6,
+                   attribute7,
+                   attribute8,
+                   attribute9,
+                   attribute10,
+                   attribute11,
+                   attribute12,
+                   attribute13,
+                   attribute14,
+                   attribute15,
+                   attribute16,
+                   attribute17,
+                   attribute18,
+                   attribute19,
+                   attribute20,
+                   xx_attribute1,
+                   xx_attribute2,
+                   xx_attribute3,
+                   xx_attribute4,
+                   xx_attribute5,
+                   xx_attribute6,
+                   xx_attribute7,
+                   xx_attribute8,
+                   xx_attribute9,
+                   xx_attribute10,
+                   xx_attribute11,
+                   xx_attribute12,
+                   xx_attribute13,
+                   xx_attribute14,
+                   xx_attribute15,
+                   xx_attribute16,
+                   xx_attribute17,
+                   xx_attribute18,
+                   xx_attribute19,
+                   xx_attribute20,
+                   xx_attribute21,
+                   xx_attribute22,
+                   xx_attribute23,
+                   xx_attribute24,
+                   xx_attribute25,
+                   xx_attribute26,
+                   xx_attribute27,
+                   xx_attribute28,
+                   xx_attribute29,
+                   xx_attribute30,
+                   xx_attribute31,
+                   xx_attribute32,
+                   xx_attribute33,
+                   xx_attribute34,
+                   xx_attribute35,
+                   xx_attribute36,
+                   xx_attribute37,
+                   xx_attribute38,
+                   xx_attribute39,
+                   xx_attribute40,
+                   xx_attribute41,
+                   xx_attribute42,
+                   xx_attribute43,
+                   xx_attribute44,
+                   xx_attribute45,
+                   entered_dr,
+                   entered_cr,
+                   accounted_dr,
+                   accounted_cr,
+                   currency_code,
+                   currency_conversion_date,
+                   user_currency_conversion_type,
+                   currency_conversion_rate,
+                   invoice_id,
+                   code_combination_id,
+                   status,
+                   actual_flag,
+                   ledger_name,
+                   process_status,
+                   error_flag,
+                   error_message,
+                   legal_entity_id,
+                   created_by,
+                   creation_date,
+                   last_updated_by,
+                   last_update_date,
+                   last_update_login,
+                   request_id,
+                   program_application_id,
+                   program_id,
+                   program_update_date,
+                   org_id /* 05-APR-2013 add */
+                  )
+           VALUES (irt_xx00gl_journal_if.je_header_num,
+                   irt_xx00gl_journal_if.je_line_num,
+                   irt_xx00gl_journal_if.je_category_key,
+                   irt_xx00gl_journal_if.user_je_source_name,
+                   irt_xx00gl_journal_if.accounting_date,
+                   irt_xx00gl_journal_if.cr_dr_flag,
+                   irt_xx00gl_journal_if.period_name,
+                   irt_xx00gl_journal_if.reference1,
+                   irt_xx00gl_journal_if.reference2,
+                   irt_xx00gl_journal_if.reference4,
+                   irt_xx00gl_journal_if.reference5,
+                   irt_xx00gl_journal_if.reference6,
+                   irt_xx00gl_journal_if.reference7,
+                   irt_xx00gl_journal_if.reference8,
+                   irt_xx00gl_journal_if.reference9,
+                   irt_xx00gl_journal_if.reference10,
+                   irt_xx00gl_journal_if.jgzz_recon_ref,
+                   irt_xx00gl_journal_if.tax_regime_code,
+                   irt_xx00gl_journal_if.tax,
+                   irt_xx00gl_journal_if.tax_status_code,
+                   irt_xx00gl_journal_if.tax_jurisdiction_code,
+                   irt_xx00gl_journal_if.tax_rate_code,
+                   irt_xx00gl_journal_if.tax_rate,
+                   irt_xx00gl_journal_if.tax_line_group,
+                   irt_xx00gl_journal_if.segment1,
+                   irt_xx00gl_journal_if.segment2,
+                   irt_xx00gl_journal_if.segment3,
+                   irt_xx00gl_journal_if.segment4,
+                   irt_xx00gl_journal_if.segment5,
+                   irt_xx00gl_journal_if.segment6,
+                   irt_xx00gl_journal_if.segment7,
+                   irt_xx00gl_journal_if.segment8,
+                   irt_xx00gl_journal_if.segment9,
+                   irt_xx00gl_journal_if.segment10,
+                   irt_xx00gl_journal_if.segment11,
+                   irt_xx00gl_journal_if.attribute1,
+                   irt_xx00gl_journal_if.attribute2,
+                   irt_xx00gl_journal_if.attribute3,
+                   irt_xx00gl_journal_if.attribute4,
+                   irt_xx00gl_journal_if.attribute5,
+                   irt_xx00gl_journal_if.attribute6,
+                   irt_xx00gl_journal_if.attribute7,
+                   irt_xx00gl_journal_if.attribute8,
+                   irt_xx00gl_journal_if.attribute9,
+                   irt_xx00gl_journal_if.attribute10,
+                   irt_xx00gl_journal_if.attribute11,
+                   irt_xx00gl_journal_if.attribute12,
+                   irt_xx00gl_journal_if.attribute13,
+                   irt_xx00gl_journal_if.attribute14,
+                   irt_xx00gl_journal_if.attribute15,
+                   irt_xx00gl_journal_if.attribute16,
+                   irt_xx00gl_journal_if.attribute17,
+                   irt_xx00gl_journal_if.attribute18,
+                   irt_xx00gl_journal_if.attribute19,
+                   irt_xx00gl_journal_if.attribute20,
+                   irt_xx00gl_journal_if.xx_attribute1,
+                   irt_xx00gl_journal_if.xx_attribute2,
+                   irt_xx00gl_journal_if.xx_attribute3,
+                   irt_xx00gl_journal_if.xx_attribute4,
+                   irt_xx00gl_journal_if.xx_attribute5,
+                   irt_xx00gl_journal_if.xx_attribute6,
+                   irt_xx00gl_journal_if.xx_attribute7,
+                   irt_xx00gl_journal_if.xx_attribute8,
+                   irt_xx00gl_journal_if.xx_attribute9,
+                   irt_xx00gl_journal_if.xx_attribute10,
+                   irt_xx00gl_journal_if.xx_attribute11,
+                   irt_xx00gl_journal_if.xx_attribute12,
+                   irt_xx00gl_journal_if.xx_attribute13,
+                   irt_xx00gl_journal_if.xx_attribute14,
+                   irt_xx00gl_journal_if.xx_attribute15,
+                   irt_xx00gl_journal_if.xx_attribute16,
+                   irt_xx00gl_journal_if.xx_attribute17,
+                   irt_xx00gl_journal_if.xx_attribute18,
+                   irt_xx00gl_journal_if.xx_attribute19,
+                   irt_xx00gl_journal_if.xx_attribute20,
+                   irt_xx00gl_journal_if.xx_attribute21,
+                   irt_xx00gl_journal_if.xx_attribute22,
+                   irt_xx00gl_journal_if.xx_attribute23,
+                   irt_xx00gl_journal_if.xx_attribute24,
+                   irt_xx00gl_journal_if.xx_attribute25,
+                   irt_xx00gl_journal_if.xx_attribute26,
+                   irt_xx00gl_journal_if.xx_attribute27,
+                   irt_xx00gl_journal_if.xx_attribute28,
+                   irt_xx00gl_journal_if.xx_attribute29,
+                   irt_xx00gl_journal_if.xx_attribute30,
+                   irt_xx00gl_journal_if.xx_attribute31,
+                   irt_xx00gl_journal_if.xx_attribute32,
+                   irt_xx00gl_journal_if.xx_attribute33,
+                   irt_xx00gl_journal_if.xx_attribute34,
+                   irt_xx00gl_journal_if.xx_attribute35,
+                   irt_xx00gl_journal_if.xx_attribute36,
+                   irt_xx00gl_journal_if.xx_attribute37,
+                   irt_xx00gl_journal_if.xx_attribute38,
+                   irt_xx00gl_journal_if.xx_attribute39,
+                   irt_xx00gl_journal_if.xx_attribute40,
+                   irt_xx00gl_journal_if.xx_attribute41,
+                   irt_xx00gl_journal_if.xx_attribute42,
+                   irt_xx00gl_journal_if.xx_attribute43,
+                   irt_xx00gl_journal_if.xx_attribute44,
+                   irt_xx00gl_journal_if.xx_attribute45,
+                   irt_xx00gl_journal_if.entered_dr,
+                   irt_xx00gl_journal_if.entered_cr,
+                   irt_xx00gl_journal_if.accounted_dr,
+                   irt_xx00gl_journal_if.accounted_cr,
+                   irt_xx00gl_journal_if.currency_code,
+                   irt_xx00gl_journal_if.currency_conversion_date,
+                   irt_xx00gl_journal_if.user_currency_conversion_type,
+                   irt_xx00gl_journal_if.currency_conversion_rate,
+                   irt_xx00gl_journal_if.invoice_id,
+                   irt_xx00gl_journal_if.code_combination_id,
+                   irt_xx00gl_journal_if.status,
+                   irt_xx00gl_journal_if.actual_flag,
+                   irt_xx00gl_journal_if.ledger_name,
+                   irt_xx00gl_journal_if.process_status,
+                   irt_xx00gl_journal_if.error_flag,
+                   irt_xx00gl_journal_if.error_message,
+                   irt_xx00gl_journal_if.legal_entity_id,
+                   irt_xx00gl_journal_if.created_by,
+                   irt_xx00gl_journal_if.creation_date,
+                   irt_xx00gl_journal_if.last_updated_by,
+                   irt_xx00gl_journal_if.last_update_date,
+                   irt_xx00gl_journal_if.last_update_login,
+                   irt_xx00gl_journal_if.request_id,
+                   irt_xx00gl_journal_if.program_application_id,
+                   irt_xx00gl_journal_if.program_id,
+                   irt_xx00gl_journal_if.program_update_date,
+                   irt_xx00gl_journal_if.org_id /* 05-APR-2013 add */
+                  );
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         ov_errbuf  :=  'Error occurred while inserting the data in GL Interface Table for JE Header Num-JE Line Num:'
+	 	             || irt_xx00gl_journal_if.JE_HEADER_NUM
+	 	             || '-'
+	 	             || irt_xx00gl_journal_if.JE_LINE_NUM
+	 	             || ':'
+	 	             || SQLERRM;
+
+   END populate_gl_line_if;
+
+/********************************************************************************************************
+*  Procedure Name       :   populate_gl_if
+*  Description          :   Assigning values from Table type to record type
+********************************************************************************************************/
+   PROCEDURE populate_gl_if (
+      ov_errbuf                OUT      VARCHAR2,           --   error message
+      ov_retcode               OUT      VARCHAR2,             --   return code
+      itt_xx00gl_journal_stg   IN       tbl_gl_stg
+   )
+   IS
+-- ===============================
+-- local Constant
+-- ===============================
+      cv_proc_name    CONSTANT VARCHAR2 (100)             := 'populate_gl_if';
+      -- procedure name
+      cv_proc_desc    CONSTANT VARCHAR2 (50)       := 'Populate GL Interface';
+      -- process description
+      lv_block                 VARCHAR2 (10);         -- process block number
+      lt_sess_info_str_type    xx00ifcmn_conc_init_proc_sv.sess_info_str_type;
+      lv_err_code              VARCHAR2 (1);
+      lv_err_msg_add           VARCHAR2 (4000);
+      lv_err_msg               VARCHAR2 (4000);
+      lrt_xx00gl_if            xx00ifgl_journal_if%ROWTYPE;
+      user_session_info_expt   EXCEPTION;
+      l_hdr_ins_expt           EXCEPTION;
+   BEGIN
+      ov_retcode := xx00ifcmn_const_sv.cv_success;                  -- normal
+      ov_errbuf := NULL;
+
+      lv_block := '1-0';
+
+      xx00ifcmn_conc_init_proc_sv.get_sess_info
+                                      (ov_errbuf          => lv_err_msg,
+                                       ov_retcode         => lv_err_code,
+                                       ort_sess_info      => lt_sess_info_str_type
+                                      );
+
+      IF (lv_err_code = xx00ifcmn_const_sv.cv_error)
+      THEN
+         RAISE user_session_info_expt;
+      END IF;
+
+      lv_err_msg := NULL;
+
+      lv_block := '1-1';
+      FOR i IN 1 .. itt_xx00gl_journal_stg.COUNT
+      LOOP
+         BEGIN
+            lv_block := '1-2';
+            lrt_xx00gl_if.je_header_num :=
+                                     itt_xx00gl_journal_stg (i).je_header_num;
+            lrt_xx00gl_if.je_line_num :=
+                                       itt_xx00gl_journal_stg (i).je_line_num;
+            lrt_xx00gl_if.je_category_key :=
+                                   itt_xx00gl_journal_stg (i).je_category_key;
+            lrt_xx00gl_if.user_je_source_name :=
+                               itt_xx00gl_journal_stg (i).user_je_source_name;
+            lrt_xx00gl_if.accounting_date :=
+                                   itt_xx00gl_journal_stg (i).accounting_date;
+            lrt_xx00gl_if.cr_dr_flag := itt_xx00gl_journal_stg (i).cr_dr_flag;
+            lrt_xx00gl_if.period_name :=
+                                       itt_xx00gl_journal_stg (i).period_name;
+            lrt_xx00gl_if.reference1 := itt_xx00gl_journal_stg (i).reference1;
+            lrt_xx00gl_if.reference2 := itt_xx00gl_journal_stg (i).reference2;
+            lrt_xx00gl_if.reference4 := itt_xx00gl_journal_stg (i).reference4;
+            lrt_xx00gl_if.reference5 := itt_xx00gl_journal_stg (i).reference5;
+            lrt_xx00gl_if.reference6 := itt_xx00gl_journal_stg (i).reference6;
+            lrt_xx00gl_if.reference7 := itt_xx00gl_journal_stg (i).reference7;
+            lrt_xx00gl_if.reference8 := itt_xx00gl_journal_stg (i).reference8;
+            lrt_xx00gl_if.reference9 := itt_xx00gl_journal_stg (i).reference9;
+            lrt_xx00gl_if.reference10 :=
+                                       itt_xx00gl_journal_stg (i).reference10;
+            lrt_xx00gl_if.jgzz_recon_ref :=
+                                    itt_xx00gl_journal_stg (i).jgzz_recon_ref;
+            lrt_xx00gl_if.tax_regime_code :=
+                                   itt_xx00gl_journal_stg (i).tax_regime_code;
+            lrt_xx00gl_if.tax := itt_xx00gl_journal_stg (i).tax;
+            lrt_xx00gl_if.tax_status_code :=
+                                   itt_xx00gl_journal_stg (i).tax_status_code;
+            lrt_xx00gl_if.tax_jurisdiction_code :=
+                             itt_xx00gl_journal_stg (i).tax_jurisdiction_code;
+            lrt_xx00gl_if.tax_rate_code :=
+                                     itt_xx00gl_journal_stg (i).tax_rate_code;
+            lrt_xx00gl_if.tax_rate := itt_xx00gl_journal_stg (i).tax_rate;
+            lrt_xx00gl_if.tax_line_group :=
+                                    itt_xx00gl_journal_stg (i).tax_line_group;
+            lrt_xx00gl_if.segment1 := itt_xx00gl_journal_stg (i).segment1;
+            lrt_xx00gl_if.segment2 := itt_xx00gl_journal_stg (i).segment2;
+            lrt_xx00gl_if.segment3 := itt_xx00gl_journal_stg (i).segment3;
+            lrt_xx00gl_if.segment4 := itt_xx00gl_journal_stg (i).segment4;
+            lrt_xx00gl_if.segment5 := itt_xx00gl_journal_stg (i).segment5;
+            lrt_xx00gl_if.segment6 := itt_xx00gl_journal_stg (i).segment6;
+            lrt_xx00gl_if.segment7 := itt_xx00gl_journal_stg (i).segment7;
+            lrt_xx00gl_if.segment8 := itt_xx00gl_journal_stg (i).segment8;
+            lrt_xx00gl_if.segment9 := itt_xx00gl_journal_stg (i).segment9;
+            lrt_xx00gl_if.segment10 := itt_xx00gl_journal_stg (i).segment10;
+            lrt_xx00gl_if.segment11 := itt_xx00gl_journal_stg (i).segment11;
+
+            lv_block := '1-3';
+
+            lrt_xx00gl_if.code_combination_id :=
+                               itt_xx00gl_journal_stg (i).code_combination_id;
+            lrt_xx00gl_if.attribute1 := itt_xx00gl_journal_stg (i).attribute1;
+            lrt_xx00gl_if.attribute2 := itt_xx00gl_journal_stg (i).attribute2;
+            lrt_xx00gl_if.attribute3 := itt_xx00gl_journal_stg (i).attribute3;
+            lrt_xx00gl_if.attribute4 := itt_xx00gl_journal_stg (i).attribute4;
+            lrt_xx00gl_if.attribute5 := itt_xx00gl_journal_stg (i).attribute5;
+            lrt_xx00gl_if.attribute6 := itt_xx00gl_journal_stg (i).attribute6;
+            lrt_xx00gl_if.attribute7 := itt_xx00gl_journal_stg (i).attribute7;
+            lrt_xx00gl_if.attribute8 := itt_xx00gl_journal_stg (i).attribute8;
+            lrt_xx00gl_if.attribute9 := itt_xx00gl_journal_stg (i).attribute9;
+            lrt_xx00gl_if.attribute10 :=
+                                       itt_xx00gl_journal_stg (i).attribute10;
+            lrt_xx00gl_if.attribute11 :=
+                                       itt_xx00gl_journal_stg (i).attribute11;
+            lrt_xx00gl_if.attribute12 :=
+                                       itt_xx00gl_journal_stg (i).attribute12;
+            lrt_xx00gl_if.attribute13 :=
+                                       itt_xx00gl_journal_stg (i).attribute13;
+            lrt_xx00gl_if.attribute14 :=
+                                       itt_xx00gl_journal_stg (i).attribute14;
+            lrt_xx00gl_if.attribute15 :=
+                                       itt_xx00gl_journal_stg (i).attribute15;
+            lrt_xx00gl_if.attribute16 :=
+                                       itt_xx00gl_journal_stg (i).attribute16;
+            lrt_xx00gl_if.attribute17 :=
+                                       itt_xx00gl_journal_stg (i).attribute17;
+            lrt_xx00gl_if.attribute18 :=
+                                       itt_xx00gl_journal_stg (i).attribute18;
+            lrt_xx00gl_if.attribute19 :=
+                                       itt_xx00gl_journal_stg (i).attribute19;
+            lrt_xx00gl_if.attribute20 :=
+                                       itt_xx00gl_journal_stg (i).attribute20;
+            lrt_xx00gl_if.xx_attribute1 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute1;
+            lrt_xx00gl_if.xx_attribute2 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute2;
+            lrt_xx00gl_if.xx_attribute3 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute3;
+            lrt_xx00gl_if.xx_attribute4 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute4;
+            lrt_xx00gl_if.xx_attribute5 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute5;
+            lrt_xx00gl_if.xx_attribute6 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute6;
+            lrt_xx00gl_if.xx_attribute7 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute7;
+            lrt_xx00gl_if.xx_attribute8 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute8;
+            lrt_xx00gl_if.xx_attribute9 :=
+                                     itt_xx00gl_journal_stg (i).xx_attribute9;
+            lrt_xx00gl_if.xx_attribute10 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute10;
+            lrt_xx00gl_if.xx_attribute11 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute11;
+            lrt_xx00gl_if.xx_attribute12 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute12;
+            lrt_xx00gl_if.xx_attribute13 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute13;
+            lrt_xx00gl_if.xx_attribute14 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute14;
+            lrt_xx00gl_if.xx_attribute15 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute15;
+            lrt_xx00gl_if.xx_attribute16 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute16;
+            lrt_xx00gl_if.xx_attribute17 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute17;
+            lrt_xx00gl_if.xx_attribute18 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute18;
+            lrt_xx00gl_if.xx_attribute19 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute19;
+            lrt_xx00gl_if.xx_attribute20 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute20;
+            lrt_xx00gl_if.xx_attribute21 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute21;
+            lrt_xx00gl_if.xx_attribute22 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute22;
+            lrt_xx00gl_if.xx_attribute23 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute23;
+            lrt_xx00gl_if.xx_attribute24 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute24;
+            lrt_xx00gl_if.xx_attribute25 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute25;
+            lrt_xx00gl_if.xx_attribute26 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute26;
+            lrt_xx00gl_if.xx_attribute27 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute27;
+            lrt_xx00gl_if.xx_attribute28 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute28;
+            lrt_xx00gl_if.xx_attribute29 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute29;
+            lrt_xx00gl_if.xx_attribute30 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute30;
+            lrt_xx00gl_if.xx_attribute31 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute31;
+            lrt_xx00gl_if.xx_attribute32 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute32;
+            lrt_xx00gl_if.xx_attribute33 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute33;
+            lrt_xx00gl_if.xx_attribute34 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute34;
+            lrt_xx00gl_if.xx_attribute35 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute35;
+            lrt_xx00gl_if.xx_attribute36 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute36;
+            lrt_xx00gl_if.xx_attribute37 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute37;
+            lrt_xx00gl_if.xx_attribute38 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute38;
+            lrt_xx00gl_if.xx_attribute39 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute39;
+            lrt_xx00gl_if.xx_attribute40 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute40;
+            lrt_xx00gl_if.xx_attribute41 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute41;
+            lrt_xx00gl_if.xx_attribute42 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute42;
+            lrt_xx00gl_if.xx_attribute43 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute43;
+            lrt_xx00gl_if.xx_attribute44 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute44;
+            lrt_xx00gl_if.xx_attribute45 :=
+                                    itt_xx00gl_journal_stg (i).xx_attribute45;
+
+            lv_block := '1-4';
+
+            lrt_xx00gl_if.entered_dr := itt_xx00gl_journal_stg (i).entered_dr;
+            lrt_xx00gl_if.entered_cr := itt_xx00gl_journal_stg (i).entered_cr;
+            lrt_xx00gl_if.accounted_dr :=
+                                      itt_xx00gl_journal_stg (i).accounted_dr;
+            lrt_xx00gl_if.accounted_cr :=
+                                      itt_xx00gl_journal_stg (i).accounted_cr;
+            lrt_xx00gl_if.currency_code :=
+                                     itt_xx00gl_journal_stg (i).currency_code;
+            lrt_xx00gl_if.currency_conversion_date :=
+                          itt_xx00gl_journal_stg (i).currency_conversion_date;
+            lrt_xx00gl_if.user_currency_conversion_type :=
+                     itt_xx00gl_journal_stg (i).user_currency_conversion_type;
+            lrt_xx00gl_if.currency_conversion_rate :=
+                          itt_xx00gl_journal_stg (i).currency_conversion_rate;
+            lrt_xx00gl_if.status := itt_xx00gl_journal_stg (i).status;
+            lrt_xx00gl_if.actual_flag :=
+                                       itt_xx00gl_journal_stg (i).actual_flag;
+            lrt_xx00gl_if.ledger_name :=
+                                       itt_xx00gl_journal_stg (i).ledger_name;
+            lrt_xx00gl_if.invoice_id := itt_xx00gl_journal_stg (i).invoice_id;
+            lrt_xx00gl_if.distribution_line_number :=
+                          itt_xx00gl_journal_stg (i).distribution_line_number;
+            lrt_xx00gl_if.process_status :=
+                                    itt_xx00gl_journal_stg (i).process_status;
+            lrt_xx00gl_if.error_flag := itt_xx00gl_journal_stg (i).error_flag;
+            lrt_xx00gl_if.error_message :=
+                                     itt_xx00gl_journal_stg (i).error_message;
+            lrt_xx00gl_if.legal_entity_id :=
+                                   itt_xx00gl_journal_stg (i).legal_entity_id;
+            lrt_xx00gl_if.created_by := lt_sess_info_str_type.user_id;
+            lrt_xx00gl_if.creation_date := gd_xx02_sysdate;
+            lrt_xx00gl_if.last_updated_by := lt_sess_info_str_type.user_id;
+            lrt_xx00gl_if.last_update_date := gd_xx02_sysdate;
+            lrt_xx00gl_if.last_update_login := lt_sess_info_str_type.user_id;
+            lrt_xx00gl_if.request_id := lt_sess_info_str_type.conc_request_id;
+            lrt_xx00gl_if.program_application_id :=
+                                           lt_sess_info_str_type.prog_appl_id;
+            lrt_xx00gl_if.program_id := lt_sess_info_str_type.conc_program_id;
+            lrt_xx00gl_if.program_update_date := gd_xx02_sysdate;
+            lrt_xx00gl_if.org_id := itt_xx00gl_journal_stg (i).org_id; /* 05-APR-2013 add */
+         EXCEPTION
+            WHEN OTHERS
+            THEN
+               lv_err_msg :=
+                  SUBSTR
+                     (   lv_err_msg
+                      || 'Error while assigning values to Line Type Record:'
+                      || SQLERRM,
+                      1,
+                      4000
+                     );
+               RAISE l_hdr_ins_expt;
+         END;
+
+         lv_block := '2-0';
+         populate_gl_line_if (lv_err_msg_add, lv_err_code, lrt_xx00gl_if);
+
+         IF lv_err_code <> xx00ifcmn_const_sv.cv_success
+         THEN
+            lv_err_msg := SUBSTR (lv_err_msg || lv_err_msg_add, 1, 4000);
+            RAISE l_hdr_ins_expt;
+         END IF;
+      END LOOP;
+   EXCEPTION
+      WHEN l_hdr_ins_expt
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;                 -- normal
+         ov_errbuf := lv_err_msg;
+      WHEN user_session_info_expt
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;                 -- normal
+         ov_errbuf := 'Error while initializing session';
+      WHEN OTHERS
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;                 -- normal
+         ov_errbuf :=
+            SUBSTRB (   cv_proc_name
+                     || cv_period
+                     || lv_block
+                     || cv_delimiter_msg
+                     || 'In When Others'
+                     || SQLERRM,
+                     1,
+                     5000
+                    );
+         ROLLBACK;
+   END populate_gl_if;
+
+/********************************************************************************************************
+*  Procedure Name       :   populate_gl_stg
+*  Description          :   Insertion of Data into GL Journal Staging Table
+********************************************************************************************************/
+--
+   PROCEDURE populate_gl_stg (
+      ov_errbuf                OUT      VARCHAR2,           --   error message
+      ov_retcode               OUT      VARCHAR2,             --   return code
+      irt_xx00gl_journal_stg   IN       xx00ifgl_journal_stg%ROWTYPE
+   )
+   IS
+   BEGIN
+      ov_retcode := xx00ifcmn_const_sv.cv_success;
+
+      INSERT INTO xx00ifgl_journal_stg
+                  (je_header_num,
+                   je_line_num,
+                   je_category_key,
+                   user_je_source_name,
+                   accounting_date,
+                   cr_dr_flag,
+                   period_name,
+                   reference1,
+                   reference2,
+                   reference4,
+                   reference5,
+                   reference6,
+                   reference7,
+                   reference8,
+                   reference9,
+                   reference10,
+                   jgzz_recon_ref,
+                   tax_regime_code,
+                   tax,
+                   tax_status_code,
+                   tax_jurisdiction_code,
+                   tax_rate_code,
+                   tax_rate,
+                   tax_line_group,
+                   segment1,
+                   segment2,
+                   segment3,
+                   segment4,
+                   segment5,
+                   segment6,
+                   segment7,
+                   segment8,
+                   segment9,
+                   segment10,
+                   segment11,
+                   attribute1,
+                   attribute2,
+                   attribute3,
+                   attribute4,
+                   attribute5,
+                   attribute6,
+                   attribute7,
+                   attribute8,
+                   attribute9,
+                   attribute10,
+                   attribute11,
+                   attribute12,
+                   attribute13,
+                   attribute14,
+                   attribute15,
+                   attribute16,
+                   attribute17,
+                   attribute18,
+                   attribute19,
+                   attribute20,
+                   xx_attribute1,
+                   xx_attribute2,
+                   xx_attribute3,
+                   xx_attribute4,
+                   xx_attribute5,
+                   xx_attribute6,
+                   xx_attribute7,
+                   xx_attribute8,
+                   xx_attribute9,
+                   xx_attribute10,
+                   xx_attribute11,
+                   xx_attribute12,
+                   xx_attribute13,
+                   xx_attribute14,
+                   xx_attribute15,
+                   xx_attribute16,
+                   xx_attribute17,
+                   xx_attribute18,
+                   xx_attribute19,
+                   xx_attribute20,
+                   xx_attribute21,
+                   xx_attribute22,
+                   xx_attribute23,
+                   xx_attribute24,
+                   xx_attribute25,
+                   xx_attribute26,
+                   xx_attribute27,
+                   xx_attribute28,
+                   xx_attribute29,
+                   xx_attribute30,
+                   xx_attribute31,
+                   xx_attribute32,
+                   xx_attribute33,
+                   xx_attribute34,
+                   xx_attribute35,
+                   xx_attribute36,
+                   xx_attribute37,
+                   xx_attribute38,
+                   xx_attribute39,
+                   xx_attribute40,
+                   xx_attribute41,
+                   xx_attribute42,
+                   xx_attribute43,
+                   xx_attribute44,
+                   xx_attribute45,
+                   entered_dr,
+                   entered_cr,
+                   accounted_dr,
+                   accounted_cr,
+                   currency_code,
+                   currency_conversion_date,
+                   user_currency_conversion_type,
+                   currency_conversion_rate,
+                   invoice_id,
+                   code_combination_id,
+                   status,
+                   actual_flag,
+                   ledger_name,
+                   process_status,
+                   error_flag,
+                   error_message,
+                   legal_entity_id,
+                   created_by,
+                   creation_date,
+                   last_updated_by,
+                   last_update_date,
+                   last_update_login,
+                   request_id,
+                   program_application_id,
+                   program_id,
+                   program_update_date,
+                   transaction_id, /* 05-APR-2013 add */
+                   org_id          /* 05-APR-2013 add */
+                  )
+           VALUES (irt_xx00gl_journal_stg.je_header_num,
+                   irt_xx00gl_journal_stg.je_line_num,
+                   irt_xx00gl_journal_stg.je_category_key,
+                   irt_xx00gl_journal_stg.user_je_source_name,
+                   irt_xx00gl_journal_stg.accounting_date,
+                   irt_xx00gl_journal_stg.cr_dr_flag,
+                   irt_xx00gl_journal_stg.period_name,
+                   irt_xx00gl_journal_stg.reference1,
+                   irt_xx00gl_journal_stg.reference2,
+                   irt_xx00gl_journal_stg.reference4,
+                   irt_xx00gl_journal_stg.reference5,
+                   irt_xx00gl_journal_stg.reference6,
+                   irt_xx00gl_journal_stg.reference7,
+                   irt_xx00gl_journal_stg.reference8,
+                   irt_xx00gl_journal_stg.reference9,
+                   irt_xx00gl_journal_stg.reference10,
+                   irt_xx00gl_journal_stg.jgzz_recon_ref,
+                   irt_xx00gl_journal_stg.tax_regime_code,
+                   irt_xx00gl_journal_stg.tax,
+                   irt_xx00gl_journal_stg.tax_status_code,
+                   irt_xx00gl_journal_stg.tax_jurisdiction_code,
+                   irt_xx00gl_journal_stg.tax_rate_code,
+                   irt_xx00gl_journal_stg.tax_rate,
+                   irt_xx00gl_journal_stg.tax_line_group,
+                   irt_xx00gl_journal_stg.segment1,
+                   irt_xx00gl_journal_stg.segment2,
+                   irt_xx00gl_journal_stg.segment3,
+                   irt_xx00gl_journal_stg.segment4,
+                   irt_xx00gl_journal_stg.segment5,
+                   irt_xx00gl_journal_stg.segment6,
+                   irt_xx00gl_journal_stg.segment7,
+                   irt_xx00gl_journal_stg.segment8,
+                   irt_xx00gl_journal_stg.segment9,
+                   irt_xx00gl_journal_stg.segment10,
+                   irt_xx00gl_journal_stg.segment11,
+                   irt_xx00gl_journal_stg.attribute1,
+                   irt_xx00gl_journal_stg.attribute2,
+                   irt_xx00gl_journal_stg.attribute3,
+                   irt_xx00gl_journal_stg.attribute4,
+                   irt_xx00gl_journal_stg.attribute5,
+                   irt_xx00gl_journal_stg.attribute6,
+                   irt_xx00gl_journal_stg.attribute7,
+                   irt_xx00gl_journal_stg.attribute8,
+                   irt_xx00gl_journal_stg.attribute9,
+                   irt_xx00gl_journal_stg.attribute10,
+                   irt_xx00gl_journal_stg.attribute11,
+                   irt_xx00gl_journal_stg.attribute12,
+                   irt_xx00gl_journal_stg.attribute13,
+                   irt_xx00gl_journal_stg.attribute14,
+                   irt_xx00gl_journal_stg.attribute15,
+                   irt_xx00gl_journal_stg.attribute16,
+                   irt_xx00gl_journal_stg.attribute17,
+                   irt_xx00gl_journal_stg.attribute18,
+                   irt_xx00gl_journal_stg.attribute19,
+                   irt_xx00gl_journal_stg.attribute20,
+                   irt_xx00gl_journal_stg.xx_attribute1,
+                   irt_xx00gl_journal_stg.xx_attribute2,
+                   irt_xx00gl_journal_stg.xx_attribute3,
+                   irt_xx00gl_journal_stg.xx_attribute4,
+                   irt_xx00gl_journal_stg.xx_attribute5,
+                   irt_xx00gl_journal_stg.xx_attribute6,
+                   irt_xx00gl_journal_stg.xx_attribute7,
+                   irt_xx00gl_journal_stg.xx_attribute8,
+                   irt_xx00gl_journal_stg.xx_attribute9,
+                   irt_xx00gl_journal_stg.xx_attribute10,
+                   irt_xx00gl_journal_stg.xx_attribute11,
+                   irt_xx00gl_journal_stg.xx_attribute12,
+                   irt_xx00gl_journal_stg.xx_attribute13,
+                   irt_xx00gl_journal_stg.xx_attribute14,
+                   irt_xx00gl_journal_stg.xx_attribute15,
+                   irt_xx00gl_journal_stg.xx_attribute16,
+                   irt_xx00gl_journal_stg.xx_attribute17,
+                   irt_xx00gl_journal_stg.xx_attribute18,
+                   irt_xx00gl_journal_stg.xx_attribute19,
+                   irt_xx00gl_journal_stg.xx_attribute20,
+                   irt_xx00gl_journal_stg.xx_attribute21,
+                   irt_xx00gl_journal_stg.xx_attribute22,
+                   irt_xx00gl_journal_stg.xx_attribute23,
+                   irt_xx00gl_journal_stg.xx_attribute24,
+                   irt_xx00gl_journal_stg.xx_attribute25,
+                   irt_xx00gl_journal_stg.xx_attribute26,
+                   irt_xx00gl_journal_stg.xx_attribute27,
+                   irt_xx00gl_journal_stg.xx_attribute28,
+                   irt_xx00gl_journal_stg.xx_attribute29,
+                   irt_xx00gl_journal_stg.xx_attribute30,
+                   irt_xx00gl_journal_stg.xx_attribute31,
+                   irt_xx00gl_journal_stg.xx_attribute32,
+                   irt_xx00gl_journal_stg.xx_attribute33,
+                   irt_xx00gl_journal_stg.xx_attribute34,
+                   irt_xx00gl_journal_stg.xx_attribute35,
+                   irt_xx00gl_journal_stg.xx_attribute36,
+                   irt_xx00gl_journal_stg.xx_attribute37,
+                   irt_xx00gl_journal_stg.xx_attribute38,
+                   irt_xx00gl_journal_stg.xx_attribute39,
+                   irt_xx00gl_journal_stg.xx_attribute40,
+                   irt_xx00gl_journal_stg.xx_attribute41,
+                   irt_xx00gl_journal_stg.xx_attribute42,
+                   irt_xx00gl_journal_stg.xx_attribute43,
+                   irt_xx00gl_journal_stg.xx_attribute44,
+                   irt_xx00gl_journal_stg.xx_attribute45,
+                   irt_xx00gl_journal_stg.entered_dr,
+                   irt_xx00gl_journal_stg.entered_cr,
+                   irt_xx00gl_journal_stg.accounted_dr,
+                   irt_xx00gl_journal_stg.accounted_cr,
+                   irt_xx00gl_journal_stg.currency_code,
+                   irt_xx00gl_journal_stg.currency_conversion_date,
+                   irt_xx00gl_journal_stg.user_currency_conversion_type,
+                   irt_xx00gl_journal_stg.currency_conversion_rate,
+                   irt_xx00gl_journal_stg.invoice_id,
+                   irt_xx00gl_journal_stg.code_combination_id,
+                   irt_xx00gl_journal_stg.status,
+                   irt_xx00gl_journal_stg.actual_flag,
+                   irt_xx00gl_journal_stg.ledger_name,
+                   irt_xx00gl_journal_stg.process_status,
+                   irt_xx00gl_journal_stg.error_flag,
+                   irt_xx00gl_journal_stg.error_message,
+                   irt_xx00gl_journal_stg.legal_entity_id,
+                   irt_xx00gl_journal_stg.created_by,
+                   irt_xx00gl_journal_stg.creation_date,
+                   irt_xx00gl_journal_stg.last_updated_by,
+                   irt_xx00gl_journal_stg.last_update_date,
+                   irt_xx00gl_journal_stg.last_update_login,
+                   irt_xx00gl_journal_stg.request_id,
+                   irt_xx00gl_journal_stg.program_application_id,
+                   irt_xx00gl_journal_stg.program_id,
+                   irt_xx00gl_journal_stg.program_update_date,
+                   irt_xx00gl_journal_stg.transaction_id, /* 05-APR-2013 add */
+                   irt_xx00gl_journal_stg.org_id          /* 05-APR-2013 add */
+                  );
+   EXCEPTION
+      WHEN OTHERS
+      THEN
+         ov_retcode := xx00ifcmn_const_sv.cv_error;
+         ov_errbuf  :=  'Error occurred while inserting the data in GL Staging Table for JE Header Num-JE Line Num:'
+	             || irt_xx00gl_journal_stg.JE_HEADER_NUM
+	             || '-'
+	             || irt_xx00gl_journal_stg.JE_LINE_NUM
+	             || ':'
+	             || SQLERRM;
+
+   END populate_gl_stg;
+--
+-- End of populate_gl_stg
+--
+--
+END xx00ifgl_interface_conc_sv;
+/
