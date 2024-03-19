@@ -1,0 +1,43 @@
+PWEDE ITANONG SA INQUIRER
+kelan nag transact
+
+invoice no.
+ id no. affected data
+
+kada month end 
+ar di pwede manual (running) 
+gl pwede manual recovery
+
+ap manual input nila
+
+pras pj ia(flowchart ng lahat)
+
+
+recovey : recover na data na nag error
+
+error sa gaia pero na transferred
+
+anong program sa n nag error
+
+USE FTP TO  FIND the program(PL/SQL) for a table
+
+pag may lines sa table means mas maraming info
+
+PURCHASE ORDER - P.O
+AP:
+-, pUR - P.O, HRMS , WEB- kasi nag lolook up ng data dito pag sa portal,IMPEX - binabayaran sa shipment, canteen, walang auto process kaya manual naglalagay ng data
+sila nag rurun ng mga program
+
+AR: add sa assets, paid by customers
+- OM, G-LOGOS(logistics) 0007g logos data may checking process pa , pag DN/CN isa napasok agad sa staging table 
+
+single request process isa isang program, request set means lahat ng program under it is gagana
+
+set up ng torico code, customer value is source value
+GL:
+- PUR,MAnufacturing
+
+
+apps.tip_default_values
+
+apps. fnd_user
